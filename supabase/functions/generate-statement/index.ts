@@ -47,12 +47,19 @@ serve(async (req) => {
     const dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day)
 
     if (today > dueDate) {
+      // One-time late fee
       if (unit.late_fee_type === 'flat') {
         lateFee = Number(unit.late_fee_amount)
       } else if (unit.late_fee_type === 'percent') {
         lateFee = (baseRent * Number(unit.late_fee_amount)) / 100
       }
-      console.log(`Applied late fee: ${lateFee}`);
+      
+      // Daily late fee
+      const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+      const dailyFee = daysLate * Number(unit.daily_late_fee || 0)
+      lateFee += dailyFee
+      
+      console.log(`Applied late fee: ${lateFee} (one-time + ${daysLate} days × $${unit.daily_late_fee})`);
     }
 
     // Add split fee if enabled
