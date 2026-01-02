@@ -1,1 +1,10 @@
 project_id = "heismaqehgqxcrndtqmz"
+
+[functions.generate-monthly-statements]
+verify_jwt = false
+
+[functions.generate-statement]
+verify_jwt = false
+
+[functions.calculate-late-fee]
+verify_jwt = false
