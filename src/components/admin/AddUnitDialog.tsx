@@ -105,7 +105,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
       const { error } = await supabase.from("units").insert({
         property_id: propertyId,
         unit_number: unitNumber.trim(),
-        tenant_id: tenantId || null,
+        tenant_id: tenantId === "__none__" ? null : tenantId || null,
         monthly_rent: parseFloat(monthlyRent),
         due_day: dueDayNum,
         allow_split_payment: allowSplitPayment,
@@ -182,12 +182,12 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
 
             <div className="grid gap-2">
               <Label>Assign Tenant (optional)</Label>
-              <Select value={tenantId} onValueChange={setTenantId}>
+              <Select value={tenantId || "__none__"} onValueChange={setTenantId}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a tenant" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No tenant</SelectItem>
+                  <SelectItem value="__none__">No tenant</SelectItem>
                   {tenants.map((tenant) => (
                     <SelectItem key={tenant.id} value={tenant.id}>
                       {tenant.full_name || tenant.email}
