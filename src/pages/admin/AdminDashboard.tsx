@@ -94,7 +94,7 @@ export default function AdminDashboard() {
             title="Units"
             value={loading ? "—" : stats.units}
             icon={Home}
-            accentColor="secondary"
+            accentColor="blue"
           />
           <StatsCard
             title="Tenants"

@@ -5,19 +5,19 @@ interface StatsCardProps {
   title: string;
   value: string | number;
   icon: LucideIcon;
-  accentColor?: "primary" | "secondary" | "accent" | "warning";
+  accentColor?: "primary" | "blue" | "accent" | "warning";
 }
 
 const accentStyles = {
   primary: "border-t-primary",
-  secondary: "border-t-secondary",
+  blue: "border-t-sky-400",
   accent: "border-t-accent",
   warning: "border-t-yellow-500",
 };
 
 const iconStyles = {
   primary: "bg-primary/10 text-primary",
-  secondary: "bg-secondary/50 text-secondary-foreground",
+  blue: "bg-sky-100 text-sky-600",
   accent: "bg-accent/50 text-accent-foreground",
   warning: "bg-yellow-500/10 text-yellow-600",
 };
