@@ -22,10 +22,10 @@ const Index = () => {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild>
-              <Link to="/auth">Sign In</Link>
+              <Link to="/auth?mode=signin">Sign In</Link>
             </Button>
             <Button size="sm" asChild>
-              <Link to="/auth">Get Started</Link>
+              <Link to="/auth?mode=signup">Get Started</Link>
             </Button>
           </div>
         </div>
