@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, ArrowLeft } from "lucide-react";
 
 const signUpSchema = z.object({
   fullName: z.string().min(2, "Full name must be at least 2 characters").max(100),
@@ -29,7 +29,9 @@ const signInSchema = z.object({
 });
 
 export default function Auth() {
-  const [isSignUp, setIsSignUp] = useState(true);
+  const [searchParams] = useSearchParams();
+  const mode = searchParams.get("mode");
+  const [isSignUp, setIsSignUp] = useState(mode !== "signin");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
@@ -46,8 +48,12 @@ export default function Auth() {
   const { toast } = useToast();
 
   useEffect(() => {
+    setIsSignUp(mode !== "signin");
+  }, [mode]);
+
+  useEffect(() => {
     if (user) {
-      navigate("/admin");
+      navigate("/");
     }
   }, [user, navigate]);
 
@@ -150,6 +156,15 @@ export default function Auth() {
   return (
     <div className="min-h-screen bg-primary/5 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
+        {/* Back to home link */}
+        <Link 
+          to="/" 
+          className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors mb-6"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to home
+        </Link>
+
         <div className="bg-card rounded-2xl shadow-card p-8 border border-border/50 animate-fade-in">
           {/* Logo */}
           <div className="text-center mb-8">
