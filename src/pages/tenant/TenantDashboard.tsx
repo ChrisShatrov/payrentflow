@@ -31,7 +31,7 @@ interface UnitData {
   property: {
     name: string;
     address: string;
-  };
+  } | null;
 }
 
 interface StatementData {
@@ -333,16 +333,18 @@ export default function TenantDashboard() {
                 <div className="aspect-video bg-muted relative">
                   <img 
                     src="/placeholder.svg" 
-                    alt={unit.property.name}
+                    alt={unit.property?.name || "Property"}
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-foreground/80 to-transparent" />
                   <div className="absolute bottom-4 left-4 text-primary-foreground">
-                    <h3 className="font-semibold text-lg">{unit.property.name}</h3>
-                    <div className="flex items-center gap-1 text-sm opacity-80 mt-1">
-                      <MapPin className="h-3.5 w-3.5" />
-                      {unit.property.address}
-                    </div>
+                    <h3 className="font-semibold text-lg">{unit.property?.name || "Your Property"}</h3>
+                    {unit.property?.address && (
+                      <div className="flex items-center gap-1 text-sm opacity-80 mt-1">
+                        <MapPin className="h-3.5 w-3.5" />
+                        {unit.property.address}
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 text-sm mt-2">
                       <span className="flex items-center gap-1">
                         <Home className="h-3.5 w-3.5" />
