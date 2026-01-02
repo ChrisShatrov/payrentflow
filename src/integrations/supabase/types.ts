@@ -76,6 +76,7 @@ export type Database = {
           id: string
           phone: string | null
           role: string
+          stripe_account_id: string | null
         }
         Insert: {
           created_at?: string | null
@@ -84,6 +85,7 @@ export type Database = {
           id?: string
           phone?: string | null
           role: string
+          stripe_account_id?: string | null
         }
         Update: {
           created_at?: string | null
@@ -92,6 +94,7 @@ export type Database = {
           id?: string
           phone?: string | null
           role?: string
+          stripe_account_id?: string | null
         }
         Relationships: []
       }

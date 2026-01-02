@@ -8,3 +8,12 @@ verify_jwt = false
 
 [functions.calculate-late-fee]
 verify_jwt = false
+
+[functions.create-connect-account]
+verify_jwt = false
+
+[functions.create-rent-payment]
+verify_jwt = false
+
+[functions.check-connect-status]
+verify_jwt = false

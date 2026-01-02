@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
-import { Eye, EyeOff, Loader2, ArrowLeft } from "lucide-react";
+import { Eye, EyeOff, Loader2, ArrowLeft, CreditCard } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 const signUpSchema = z.object({
   fullName: z.string().min(2, "Full name must be at least 2 characters").max(100),
@@ -31,9 +32,12 @@ const signInSchema = z.object({
 export default function Auth() {
   const [searchParams] = useSearchParams();
   const mode = searchParams.get("mode");
+  const stripeOnboarding = searchParams.get("stripe_onboarding");
   const [isSignUp, setIsSignUp] = useState(mode !== "signin");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showStripeStep, setShowStripeStep] = useState(false);
+  const [stripeLoading, setStripeLoading] = useState(false);
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
@@ -43,7 +47,7 @@ export default function Auth() {
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const { signUp, signIn, user } = useAuth();
+  const { signUp, signIn, user, role } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -51,11 +55,19 @@ export default function Auth() {
     setIsSignUp(mode !== "signin");
   }, [mode]);
 
+  // Check if user needs Stripe onboarding after signup
   useEffect(() => {
-    if (user) {
-      navigate("/");
+    if (user && role === "admin" && stripeOnboarding === "true") {
+      setShowStripeStep(true);
+    } else if (user && !showStripeStep) {
+      // Redirect based on role
+      if (role === "admin") {
+        navigate("/admin");
+      } else if (role === "tenant") {
+        navigate("/tenant");
+      }
     }
-  }, [user, navigate]);
+  }, [user, role, navigate, stripeOnboarding, showStripeStep]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -105,10 +117,22 @@ export default function Auth() {
             });
           }
         } else {
-          toast({
-            title: "Account created!",
-            description: "Please check your email to confirm your account.",
-          });
+          // If landlord, show Stripe onboarding step
+          if (formData.role === "admin") {
+            toast({
+              title: "Account created!",
+              description: "Now let's set up your payment account.",
+            });
+            // Wait for auth state to update, then show Stripe step
+            setTimeout(() => {
+              setShowStripeStep(true);
+            }, 1500);
+          } else {
+            toast({
+              title: "Account created!",
+              description: "Please check your email to confirm your account.",
+            });
+          }
         }
       } else {
         const result = signInSchema.safeParse(formData);
@@ -152,6 +176,92 @@ export default function Auth() {
       setLoading(false);
     }
   };
+
+  const handleStripeConnect = async () => {
+    setStripeLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-connect-account");
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (error) {
+      console.error("Stripe Connect error:", error);
+      toast({
+        title: "Setup Failed",
+        description: error instanceof Error ? error.message : "Unable to set up payment account. You can do this later from settings.",
+        variant: "destructive",
+      });
+    } finally {
+      setStripeLoading(false);
+    }
+  };
+
+  const skipStripeSetup = () => {
+    toast({
+      title: "Skipped for now",
+      description: "You can set up your payment account later from your dashboard.",
+    });
+    navigate("/admin");
+  };
+
+  // Stripe onboarding step for landlords
+  if (showStripeStep) {
+    return (
+      <div className="min-h-screen bg-primary/5 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="bg-card rounded-2xl shadow-card p-8 border border-border/50 animate-fade-in">
+            <div className="text-center mb-8">
+              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                <CreditCard className="h-8 w-8 text-primary" />
+              </div>
+              <h1 className="text-2xl font-bold text-foreground mb-2">
+                Set Up Payments
+              </h1>
+              <p className="text-muted-foreground">
+                Connect your bank account to receive rent payments from tenants.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <Button
+                onClick={handleStripeConnect}
+                disabled={stripeLoading}
+                className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-semibold text-base"
+              >
+                {stripeLoading ? (
+                  <>
+                    <Loader2 className="animate-spin mr-2" size={20} />
+                    Setting up...
+                  </>
+                ) : (
+                  <>
+                    <CreditCard className="mr-2" size={20} />
+                    Connect with Stripe
+                  </>
+                )}
+              </Button>
+
+              <Button
+                onClick={skipStripeSetup}
+                variant="ghost"
+                className="w-full h-12 text-muted-foreground hover:text-foreground"
+              >
+                Skip for now
+              </Button>
+            </div>
+
+            <p className="text-xs text-center text-muted-foreground mt-6">
+              Powered by Stripe. Your financial data is securely handled.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-primary/5 flex items-center justify-center p-4">
