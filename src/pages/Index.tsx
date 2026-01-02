@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Building2, Users, CreditCard, BarChart3, Shield, Clock } from "lucide-react";
 
@@ -19,8 +20,12 @@ const Index = () => {
             <a href="#about" className="text-muted-foreground hover:text-foreground transition-colors">About</a>
           </nav>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm">Sign In</Button>
-            <Button variant="hero" size="sm">Get Started</Button>
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/auth">Sign In</Link>
+            </Button>
+            <Button variant="default" size="sm" asChild>
+              <Link to="/auth">Get Started</Link>
+            </Button>
           </div>
         </div>
       </header>
@@ -43,10 +48,10 @@ const Index = () => {
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
-            <Button variant="hero" size="xl">
-              Start Free Trial
+            <Button size="lg" asChild>
+              <Link to="/auth">Start Free Trial</Link>
             </Button>
-            <Button variant="outline" size="xl">
+            <Button variant="outline" size="lg">
               Watch Demo
             </Button>
           </div>
@@ -84,10 +89,11 @@ const Index = () => {
               Join thousands of property managers who trust RentFlow to handle their rental business.
             </p>
             <Button 
-              size="xl" 
+              size="lg" 
               className="bg-card text-primary hover:bg-card/90 shadow-lg"
+              asChild
             >
-              Get Started Free
+              <Link to="/auth">Get Started Free</Link>
             </Button>
           </div>
         </div>
