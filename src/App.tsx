@@ -12,6 +12,7 @@ import AdminProperties from "./pages/admin/AdminProperties";
 import AdminTenants from "./pages/admin/AdminTenants";
 import AdminStatements from "./pages/admin/AdminStatements";
 import TenantDashboard from "./pages/tenant/TenantDashboard";
+import TenantStatements from "./pages/tenant/TenantStatements";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 
 const queryClient = new QueryClient();
@@ -74,6 +75,11 @@ const AppRoutes = () => (
     <Route path="/tenant" element={
       <ProtectedRoute allowedRoles={["tenant"]}>
         <TenantDashboard />
+      </ProtectedRoute>
+    } />
+    <Route path="/tenant/statements" element={
+      <ProtectedRoute allowedRoles={["tenant"]}>
+        <TenantStatements />
       </ProtectedRoute>
     } />
     
