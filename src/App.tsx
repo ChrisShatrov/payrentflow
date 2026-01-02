@@ -11,6 +11,7 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminProperties from "./pages/admin/AdminProperties";
 import AdminTenants from "./pages/admin/AdminTenants";
 import AdminStatements from "./pages/admin/AdminStatements";
+import TenantDashboard from "./pages/tenant/TenantDashboard";
 
 const queryClient = new QueryClient();
 
@@ -28,6 +29,7 @@ const App = () => (
             <Route path="/admin/properties" element={<AdminProperties />} />
             <Route path="/admin/tenants" element={<AdminTenants />} />
             <Route path="/admin/statements" element={<AdminStatements />} />
+            <Route path="/tenant" element={<TenantDashboard />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
