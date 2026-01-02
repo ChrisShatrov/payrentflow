@@ -181,6 +181,7 @@ export type Database = {
         Row: {
           allow_split_payment: boolean | null
           created_at: string | null
+          daily_late_fee: number
           due_day: number
           id: string
           late_fee_amount: number
@@ -193,6 +194,7 @@ export type Database = {
         Insert: {
           allow_split_payment?: boolean | null
           created_at?: string | null
+          daily_late_fee?: number
           due_day: number
           id?: string
           late_fee_amount?: number
@@ -205,6 +207,7 @@ export type Database = {
         Update: {
           allow_split_payment?: boolean | null
           created_at?: string | null
+          daily_late_fee?: number
           due_day?: number
           id?: string
           late_fee_amount?: number
