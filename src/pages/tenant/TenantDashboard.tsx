@@ -14,7 +14,6 @@ import {
   Settings,
   HelpCircle,
   ArrowUpRight,
-  ArrowDownLeft,
   Clock,
   MapPin,
   ExternalLink
@@ -22,12 +21,14 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { format, differenceInDays, parseISO } from "date-fns";
+import { PaymentModal } from "@/components/tenant/PaymentModal";
 
 interface UnitData {
   id: string;
   unit_number: string;
   monthly_rent: number;
   due_day: number;
+  allow_split_payment: boolean;
   property: {
     name: string;
     address: string;
@@ -42,6 +43,7 @@ interface StatementData {
   base_rent: number;
   late_fee: number;
   additional_fees: number;
+  split_fee: number;
 }
 
 interface PaymentData {
@@ -59,6 +61,7 @@ export default function TenantDashboard() {
   const [recentPayments, setRecentPayments] = useState<PaymentData[]>([]);
   const [totalPaid, setTotalPaid] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -76,6 +79,7 @@ export default function TenantDashboard() {
           unit_number,
           monthly_rent,
           due_day,
+          allow_split_payment,
           property:properties (
             name,
             address
@@ -196,14 +200,11 @@ export default function TenantDashboard() {
                 <Button 
                   variant="outline" 
                   className="bg-primary-foreground text-primary hover:bg-primary-foreground/90 border-0"
+                  onClick={() => setPaymentModalOpen(true)}
+                  disabled={!currentStatement || currentStatement.status === "paid"}
                 >
-                  Pay Now
+                  {currentStatement?.status === "paid" ? "Paid" : "Pay Now"}
                   <ExternalLink className="ml-2 h-4 w-4" />
-                </Button>
-                <Button 
-                  className="bg-foreground text-background hover:bg-foreground/90"
-                >
-                  Schedule Payment
                 </Button>
               </div>
             </div>
@@ -230,6 +231,14 @@ export default function TenantDashboard() {
                     <p className="text-primary-foreground/60 text-xs uppercase tracking-wide mb-1">Late Fee</p>
                     <p className="text-xl font-semibold text-primary-foreground">
                       ${Number(currentStatement.late_fee).toLocaleString()}
+                    </p>
+                  </div>
+                )}
+                {Number(currentStatement.split_fee) > 0 && (
+                  <div>
+                    <p className="text-primary-foreground/60 text-xs uppercase tracking-wide mb-1">Split Fee</p>
+                    <p className="text-xl font-semibold text-primary-foreground">
+                      ${Number(currentStatement.split_fee).toLocaleString()}
                     </p>
                   </div>
                 )}
@@ -410,6 +419,14 @@ export default function TenantDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Payment Modal */}
+      <PaymentModal
+        open={paymentModalOpen}
+        onOpenChange={setPaymentModalOpen}
+        statement={currentStatement}
+        allowSplitPayment={unit?.allow_split_payment || false}
+      />
     </TenantLayout>
   );
 }
