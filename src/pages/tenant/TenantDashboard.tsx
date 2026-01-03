@@ -91,8 +91,8 @@ export default function TenantDashboard() {
       if (unitData) {
         setUnit(unitData as unknown as UnitData);
 
-        // Fetch current month's statement
-        const currentMonth = format(new Date(), "yyyy-MM");
+        // Fetch current month's statement (format: MM/yyyy)
+        const currentMonth = format(new Date(), "MM/yyyy");
         const { data: statementData } = await supabase
           .from("statements")
           .select("*")
@@ -102,6 +102,20 @@ export default function TenantDashboard() {
 
         if (statementData) {
           setCurrentStatement(statementData);
+        } else {
+          // If no statement for current month, check for any unpaid/overdue statement
+          const { data: overdueStatement } = await supabase
+            .from("statements")
+            .select("*")
+            .eq("unit_id", unitData.id)
+            .in("status", ["unpaid", "overdue"])
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          
+          if (overdueStatement) {
+            setCurrentStatement(overdueStatement);
+          }
         }
 
         // Fetch recent payments
