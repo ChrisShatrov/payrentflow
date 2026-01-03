@@ -184,14 +184,18 @@ export function PaymentModal({
 
               <Separator className="my-2" />
 
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Subtotal</span>
+              <div className="flex justify-between text-sm font-medium">
+                <span>Amount Due</span>
                 <span>${Number(statement.total_due).toFixed(2)}</span>
               </div>
 
+              <Separator className="my-2" />
+
+              <div className="text-xs text-muted-foreground mb-2">Payment Processing Fees</div>
+
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">
-                  {paymentMethod === "card" ? `Processing Fee (${CARD_FEE_PERCENT}%)` : "ACH Processing Fee"}
+                  {paymentMethod === "card" ? `Card Fee (${CARD_FEE_PERCENT}%)` : "ACH Fee"}
                 </span>
                 <span>${fees.processingFee.toFixed(2)}</span>
               </div>
@@ -206,7 +210,7 @@ export function PaymentModal({
               <Separator className="my-2" />
 
               <div className="flex justify-between font-semibold text-lg">
-                <span>Total</span>
+                <span>Total to Pay</span>
                 <span className="text-primary">${fees.total.toFixed(2)}</span>
               </div>
             </div>
