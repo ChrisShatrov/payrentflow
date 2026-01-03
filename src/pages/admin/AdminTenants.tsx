@@ -54,11 +54,11 @@ export default function AdminTenants() {
 
       if (propertiesError) throw propertiesError;
 
-      // Fetch unpaid statements
+      // Fetch unpaid/overdue statements
       const { data: statements, error: statementsError } = await supabase
         .from("statements")
         .select("unit_id, total_due, status")
-        .in("status", ["unpaid", "partial"]);
+        .in("status", ["unpaid", "partial", "overdue"]);
 
       if (statementsError) throw statementsError;
 
