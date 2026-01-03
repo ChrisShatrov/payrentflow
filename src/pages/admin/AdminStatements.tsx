@@ -13,7 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FileDown, ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import { FileDown, ChevronLeft, ChevronRight, FileText, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 interface StatementData {
   id: string;
@@ -38,6 +39,7 @@ export default function AdminStatements() {
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -99,6 +101,35 @@ export default function AdminStatements() {
       console.error("Error fetching statements:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generatePdf = async (statementId: string) => {
+    setGeneratingPdf(statementId);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-statement-pdf", {
+        body: { statement_id: statementId },
+      });
+
+      if (error) throw error;
+
+      if (data?.pdf_url) {
+        // Update local state with new PDF URL
+        setStatements((prev) =>
+          prev.map((s) =>
+            s.id === statementId ? { ...s, pdf_url: data.pdf_url } : s
+          )
+        );
+        toast.success("PDF generated successfully");
+        
+        // Open the PDF in a new tab
+        window.open(data.pdf_url, "_blank");
+      }
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      toast.error("Failed to generate PDF");
+    } finally {
+      setGeneratingPdf(null);
     }
   };
 
@@ -200,23 +231,27 @@ export default function AdminStatements() {
                       </TableCell>
                       <TableCell>{getStatusBadge(statement.status)}</TableCell>
                       <TableCell className="text-center">
-                        {statement.pdf_url ? (
+                        {generatingPdf === statement.id ? (
+                          <Button variant="ghost" size="sm" disabled>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          </Button>
+                        ) : statement.pdf_url ? (
                           <Button
                             variant="ghost"
                             size="sm"
-                            asChild
                             className="text-primary hover:text-primary"
+                            onClick={() => window.open(statement.pdf_url!, "_blank")}
                           >
-                            <a
-                              href={statement.pdf_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              <FileDown className="h-4 w-4" />
-                            </a>
+                            <FileDown className="h-4 w-4" />
                           </Button>
                         ) : (
-                          <span className="text-muted-foreground text-sm">—</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => generatePdf(statement.id)}
+                          >
+                            Generate
+                          </Button>
                         )}
                       </TableCell>
                     </TableRow>
