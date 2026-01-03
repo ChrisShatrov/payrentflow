@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { StatsCard } from "@/components/admin/StatsCard";
-import { Building2, Home, Users, AlertCircle, Plus, FileText, DollarSign, Settings } from "lucide-react";
+import { Building2, Home, Users, AlertCircle, FileText, DollarSign, Settings, CreditCard, CheckCircle2, Loader2, ExternalLink } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 
 interface DashboardStats {
   properties: number;
@@ -24,22 +27,32 @@ export default function AdminDashboard() {
   });
   const [userName, setUserName] = useState("");
   const [loading, setLoading] = useState(true);
+  const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
+  const [stripeStatus, setStripeStatus] = useState<"loading" | "not_connected" | "pending" | "active">("loading");
+  const [connectingStripe, setConnectingStripe] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
       if (!user) return;
 
       try {
-        // Fetch user profile
+        // Fetch user profile including Stripe account
         const { data: profile } = await supabase
           .from("profiles")
-          .select("full_name")
+          .select("full_name, stripe_account_id")
           .eq("id", user.id)
           .maybeSingle();
 
         if (profile?.full_name) {
           setUserName(profile.full_name);
         }
+        
+        if (profile?.stripe_account_id) {
+          setStripeAccountId(profile.stripe_account_id);
+        }
+        
+        // Check Stripe Connect status (function gets account from user's profile)
+        checkStripeStatus();
 
         // Fetch stats
         const [propertiesRes, unitsRes, statementsRes] = await Promise.all([
@@ -66,6 +79,48 @@ export default function AdminDashboard() {
 
     fetchData();
   }, [user]);
+
+  const checkStripeStatus = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke("check-connect-status");
+      
+      if (error || data?.error) {
+        setStripeStatus("not_connected");
+        return;
+      }
+      
+      if (!data?.has_account) {
+        setStripeStatus("not_connected");
+      } else if (data?.charges_enabled && data?.payouts_enabled) {
+        setStripeStatus("active");
+      } else {
+        setStripeStatus("pending");
+      }
+    } catch (error) {
+      console.error("Error checking Stripe status:", error);
+      setStripeStatus("not_connected");
+    }
+  };
+
+  const handleConnectStripe = async () => {
+    setConnectingStripe(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-connect-account");
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      
+      if (data?.url) {
+        window.open(data.url, "_blank");
+        toast.success("Complete the Stripe onboarding in the new tab");
+      }
+    } catch (error) {
+      console.error("Error connecting Stripe:", error);
+      toast.error("Failed to start Stripe Connect setup");
+    } finally {
+      setConnectingStripe(false);
+    }
+  };
 
   const quickActions = [
     { title: "Add Property", icon: Building2, href: "/admin/properties" },
@@ -109,6 +164,54 @@ export default function AdminDashboard() {
             accentColor="warning"
           />
         </div>
+
+        {/* Stripe Connect Status Card */}
+        <Card className={`p-6 mb-8 ${stripeStatus === "not_connected" ? "border-destructive/50 bg-destructive/5" : stripeStatus === "pending" ? "border-yellow-500/50 bg-yellow-500/5" : "border-primary/50 bg-primary/5"}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className={`p-3 rounded-xl ${stripeStatus === "active" ? "bg-primary/10" : stripeStatus === "pending" ? "bg-yellow-500/10" : "bg-destructive/10"}`}>
+                <CreditCard className={`h-6 w-6 ${stripeStatus === "active" ? "text-primary" : stripeStatus === "pending" ? "text-yellow-600" : "text-destructive"}`} />
+              </div>
+              <div>
+                <h3 className="font-semibold text-foreground">Payment Setup</h3>
+                <p className="text-sm text-muted-foreground">
+                  {stripeStatus === "loading" && "Checking Stripe Connect status..."}
+                  {stripeStatus === "not_connected" && "Connect your Stripe account to receive rent payments"}
+                  {stripeStatus === "pending" && "Complete your Stripe onboarding to start receiving payments"}
+                  {stripeStatus === "active" && "Your Stripe account is connected and ready to receive payments"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {stripeStatus === "loading" && (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              )}
+              {stripeStatus === "active" && (
+                <Badge className="bg-primary/10 text-primary border-0">
+                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                  Connected
+                </Badge>
+              )}
+              {stripeStatus === "pending" && (
+                <>
+                  <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 border-0">
+                    Pending
+                  </Badge>
+                  <Button onClick={handleConnectStripe} disabled={connectingStripe} size="sm">
+                    {connectingStripe ? <Loader2 className="h-4 w-4 animate-spin" /> : "Continue Setup"}
+                    <ExternalLink className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
+              )}
+              {stripeStatus === "not_connected" && (
+                <Button onClick={handleConnectStripe} disabled={connectingStripe}>
+                  {connectingStripe ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CreditCard className="h-4 w-4 mr-2" />}
+                  Connect Stripe
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
 
         {/* Welcome Banner */}
         <div className="bg-primary rounded-2xl p-8 mb-8 text-primary-foreground">
