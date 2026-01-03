@@ -12,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { Users, Mail, Phone, Building2, Home } from "lucide-react";
+import { Users, Mail, Phone } from "lucide-react";
 
 interface TenantData {
   id: string;
@@ -183,20 +183,14 @@ export default function AdminTenants() {
                     </TableCell>
                     <TableCell>
                       {tenant.propertyName ? (
-                        <div className="flex items-center gap-1.5">
-                          <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span>{tenant.propertyName}</span>
-                        </div>
+                        <span>{tenant.propertyName}</span>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
                     <TableCell>
                       {tenant.unitNumber ? (
-                        <div className="flex items-center gap-1.5">
-                          <Home className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span>Unit {tenant.unitNumber}</span>
-                        </div>
+                        <span>Unit {tenant.unitNumber}</span>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
