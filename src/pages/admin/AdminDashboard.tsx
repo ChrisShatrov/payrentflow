@@ -54,11 +54,11 @@ export default function AdminDashboard() {
         // Check Stripe Connect status (function gets account from user's profile)
         checkStripeStatus();
 
-        // Fetch stats
+        // Fetch stats - count both unpaid and overdue statements
         const [propertiesRes, unitsRes, statementsRes] = await Promise.all([
           supabase.from("properties").select("id", { count: "exact" }),
           supabase.from("units").select("id, tenant_id", { count: "exact" }),
-          supabase.from("statements").select("id", { count: "exact" }).eq("status", "unpaid"),
+          supabase.from("statements").select("id", { count: "exact" }).in("status", ["unpaid", "overdue"]),
         ]);
 
         const units = unitsRes.data || [];
