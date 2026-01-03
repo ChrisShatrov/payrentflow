@@ -11,6 +11,7 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminProperties from "./pages/admin/AdminProperties";
 import AdminTenants from "./pages/admin/AdminTenants";
 import AdminStatements from "./pages/admin/AdminStatements";
+import AdminSettings from "./pages/admin/AdminSettings";
 import TenantDashboard from "./pages/tenant/TenantDashboard";
 import TenantStatements from "./pages/tenant/TenantStatements";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
@@ -68,6 +69,11 @@ const AppRoutes = () => (
     <Route path="/admin/statements" element={
       <ProtectedRoute allowedRoles={["admin"]}>
         <AdminStatements />
+      </ProtectedRoute>
+    } />
+    <Route path="/admin/settings" element={
+      <ProtectedRoute allowedRoles={["admin"]}>
+        <AdminSettings />
       </ProtectedRoute>
     } />
     
