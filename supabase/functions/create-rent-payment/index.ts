@@ -13,8 +13,9 @@ const logStep = (step: string, details?: Record<string, unknown>) => {
 };
 
 // Fee constants
-const CARD_FEE_PERCENT = 3.5;
-const ACH_FEE_FLAT = 300; // $3.00 in cents
+const CARD_FEE_PERCENT = 3.75;
+const ACH_FEE_FLAT = 500; // $5.00 in cents
+const SERVICE_CHARGE = 2500; // $25.00 in cents
 const SPLIT_PAYMENT_FEE = 3000; // $30.00 in cents
 
 serve(async (req) => {
@@ -105,14 +106,14 @@ serve(async (req) => {
 
     // Calculate fees dynamically
     const baseAmount = Math.round(Number(statement.total_due) * 100); // Convert to cents
-    let processingFee = 0;
+    let paymentMethodFee = 0;
     let splitFee = 0;
 
     // Add payment method fee
     if (payment_method === "card") {
-      processingFee = Math.round(baseAmount * (CARD_FEE_PERCENT / 100));
+      paymentMethodFee = Math.round(baseAmount * (CARD_FEE_PERCENT / 100));
     } else {
-      processingFee = ACH_FEE_FLAT;
+      paymentMethodFee = ACH_FEE_FLAT;
     }
 
     // Add split payment fee if enabled
@@ -120,11 +121,18 @@ serve(async (req) => {
       splitFee = SPLIT_PAYMENT_FEE;
     }
 
-    const totalAmount = baseAmount + processingFee + splitFee;
+    // Total amount includes: base rent + payment method fee + service charge + split fee (if applicable)
+    const totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
+    
+    // Application fee (what goes to the platform) = payment method fee + service charge + split fee
+    const applicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee;
+    
     logStep("Fees calculated", {
       baseAmount,
-      processingFee,
+      paymentMethodFee,
+      serviceCharge: SERVICE_CHARGE,
       splitFee,
+      applicationFee,
       totalAmount
     });
 
@@ -160,7 +168,7 @@ serve(async (req) => {
       success_url: `${origin}/tenant?payment=success&statement_id=${statement_id}`,
       cancel_url: `${origin}/tenant?payment=cancelled`,
       payment_intent_data: {
-        application_fee_amount: processingFee + splitFee,
+        application_fee_amount: applicationFee,
         transfer_data: {
           destination: landlordProfile.stripe_account_id,
         },
@@ -168,7 +176,8 @@ serve(async (req) => {
           statement_id,
           unit_id: statement.unit?.id,
           payment_method,
-          processing_fee: processingFee,
+          payment_method_fee: paymentMethodFee,
+          service_charge: SERVICE_CHARGE,
           split_fee: splitFee,
         },
       },
@@ -178,19 +187,31 @@ serve(async (req) => {
       },
     };
 
-    // Add processing fee as line item
-    if (processingFee > 0) {
+    // Add payment method fee as line item
+    if (paymentMethodFee > 0) {
       sessionConfig.line_items!.push({
         price_data: {
           currency: "usd",
           product_data: {
-            name: payment_method === "card" ? "Card Processing Fee (3.5%)" : "ACH Processing Fee",
+            name: payment_method === "card" ? `Card Processing Fee (${CARD_FEE_PERCENT}%)` : "ACH Processing Fee",
           },
-          unit_amount: processingFee,
+          unit_amount: paymentMethodFee,
         },
         quantity: 1,
       });
     }
+
+    // Add service charge as line item
+    sessionConfig.line_items!.push({
+      price_data: {
+        currency: "usd",
+        product_data: {
+          name: "Service Charge",
+        },
+        unit_amount: SERVICE_CHARGE,
+      },
+      quantity: 1,
+    });
 
     // Add split payment fee as line item if applicable
     if (splitFee > 0) {
@@ -223,7 +244,7 @@ serve(async (req) => {
         unit_id: statement.unit?.id,
         statement_id: statement_id,
         amount: totalAmount / 100,
-        fee_amount: (processingFee + splitFee) / 100,
+        fee_amount: applicationFee / 100,
         payment_method,
         status: "pending",
         stripe_payment_id: session.id,
@@ -238,7 +259,8 @@ serve(async (req) => {
       session_id: session.id,
       breakdown: {
         base_amount: baseAmount / 100,
-        processing_fee: processingFee / 100,
+        payment_method_fee: paymentMethodFee / 100,
+        service_charge: SERVICE_CHARGE / 100,
         split_fee: splitFee / 100,
         total: totalAmount / 100,
       }
