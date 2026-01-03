@@ -113,48 +113,23 @@ export default function AdminStatements() {
 
       if (error) throw error;
 
-      if (data?.html) {
-        // Update local state with generated flag
+      if (data?.pdf_url) {
+        // Update local state with new PDF URL
         setStatements((prev) =>
           prev.map((s) =>
-            s.id === statementId ? { ...s, pdf_url: "generated" } : s
+            s.id === statementId ? { ...s, pdf_url: data.pdf_url } : s
           )
         );
-        toast.success("Statement generated successfully");
+        toast.success("PDF generated successfully");
         
-        // Open HTML in a new window for printing
-        const printWindow = window.open("", "_blank");
-        if (printWindow) {
-          printWindow.document.write(data.html);
-          printWindow.document.close();
-        }
+        // Open the PDF in a new tab
+        window.open(data.pdf_url, "_blank");
       }
     } catch (error) {
       console.error("Error generating PDF:", error);
-      toast.error("Failed to generate statement");
+      toast.error("Failed to generate PDF");
     } finally {
       setGeneratingPdf(null);
-    }
-  };
-
-  const viewStatement = async (statementId: string) => {
-    try {
-      const { data, error } = await supabase.functions.invoke("generate-statement-pdf", {
-        body: { statement_id: statementId },
-      });
-
-      if (error) throw error;
-
-      if (data?.html) {
-        const printWindow = window.open("", "_blank");
-        if (printWindow) {
-          printWindow.document.write(data.html);
-          printWindow.document.close();
-        }
-      }
-    } catch (error) {
-      console.error("Error viewing statement:", error);
-      toast.error("Failed to load statement");
     }
   };
 
@@ -265,7 +240,7 @@ export default function AdminStatements() {
                             variant="ghost"
                             size="sm"
                             className="text-primary hover:text-primary"
-                            onClick={() => viewStatement(statement.id)}
+                            onClick={() => window.open(statement.pdf_url!, "_blank")}
                           >
                             <FileDown className="h-4 w-4" />
                           </Button>
