@@ -352,15 +352,27 @@ export default function TenantDashboard() {
                   View Details
                 </Button>
               </div>
-              <Card className="overflow-hidden">
-                <div className="aspect-video bg-muted relative">
-                  <img 
-                    src="/placeholder.svg" 
-                    alt={unit.property?.name || "Property"}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-foreground/80 to-transparent" />
-                  <div className="absolute bottom-4 left-4 text-primary-foreground">
+              <Card className="overflow-hidden group cursor-pointer hover:shadow-lg transition-all duration-300">
+                <div className="aspect-video relative bg-gradient-to-br from-primary via-primary/80 to-accent">
+                  {/* Decorative geometric patterns */}
+                  <div className="absolute inset-0 opacity-20">
+                    <div className="absolute top-4 right-4 w-24 h-24 rounded-full border-2 border-primary-foreground/30" />
+                    <div className="absolute top-8 right-8 w-16 h-16 rounded-full border border-primary-foreground/20" />
+                    <div className="absolute bottom-16 right-12 w-8 h-8 rounded-full bg-primary-foreground/10" />
+                    <div className="absolute top-1/4 left-1/4 w-32 h-32 rounded-full bg-primary-foreground/5 blur-2xl" />
+                  </div>
+                  
+                  {/* Abstract shapes */}
+                  <div className="absolute top-0 right-0 w-1/2 h-full bg-gradient-to-l from-primary-foreground/10 to-transparent" />
+                  <div className="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-foreground/60 to-transparent" />
+                  
+                  {/* Grid pattern */}
+                  <div className="absolute inset-0 opacity-10" style={{
+                    backgroundImage: 'radial-gradient(circle, hsl(var(--primary-foreground)) 1px, transparent 1px)',
+                    backgroundSize: '20px 20px'
+                  }} />
+
+                  <div className="absolute bottom-4 left-4 text-primary-foreground z-10">
                     <h3 className="font-semibold text-lg">{unit.property?.name || "Your Property"}</h3>
                     {unit.property?.address && (
                       <div className="flex items-center gap-1 text-sm opacity-80 mt-1">
