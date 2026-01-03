@@ -184,34 +184,16 @@ export function PaymentModal({
 
               <Separator className="my-2" />
 
-              <div className="flex justify-between text-sm font-medium">
-                <span>Amount Due</span>
-                <span>${Number(statement.total_due).toFixed(2)}</span>
-              </div>
-
-              <Separator className="my-2" />
-
-              <div className="text-xs text-muted-foreground mb-2">Payment Processing Fees</div>
-
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">
-                  {paymentMethod === "card" ? `Card Fee (${CARD_FEE_PERCENT}%)` : "ACH Fee"}
-                </span>
-                <span>${fees.processingFee.toFixed(2)}</span>
-              </div>
-
-              {allowSplitPayment && fees.splitFee > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Split Payment Fee</span>
-                  <span>${fees.splitFee.toFixed(2)}</span>
-                </div>
-              )}
-
-              <Separator className="my-2" />
-
               <div className="flex justify-between font-semibold text-lg">
-                <span>Total to Pay</span>
-                <span className="text-primary">${fees.total.toFixed(2)}</span>
+                <span>Total Due</span>
+                <span className="text-primary">${Number(statement.total_due).toFixed(2)}</span>
+              </div>
+
+              <Separator className="my-2" />
+
+              <div className="text-xs text-muted-foreground">
+                A {paymentMethod === "card" ? `${CARD_FEE_PERCENT}% processing fee` : `$${ACH_FEE_FLAT} processing fee`} will be added by Stripe at checkout.
+                {allowSplitPayment && ` A $${SPLIT_PAYMENT_FEE} split payment fee also applies.`}
               </div>
             </div>
           </Card>
@@ -236,7 +218,7 @@ export function PaymentModal({
                 Processing...
               </>
             ) : (
-              `Pay $${fees.total.toFixed(2)}`
+              `Pay $${Number(statement.total_due).toFixed(2)}`
             )}
           </Button>
         </div>
