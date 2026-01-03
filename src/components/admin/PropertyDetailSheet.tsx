@@ -189,6 +189,7 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
         unit={selectedUnit}
         open={unitSheetOpen}
         onOpenChange={setUnitSheetOpen}
+        onUnitUpdated={fetchUnits}
       />
     </>
   );
