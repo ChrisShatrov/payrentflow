@@ -1,5 +1,5 @@
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Building2, Users, FileText, LogOut } from "lucide-react";
+import { LayoutDashboard, Building2, Users, FileText, LogOut, Settings } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 
@@ -8,6 +8,7 @@ const navItems = [
   { title: "Properties", url: "/admin/properties", icon: Building2 },
   { title: "Tenants", url: "/admin/tenants", icon: Users },
   { title: "Statements", url: "/admin/statements", icon: FileText },
+  { title: "Settings", url: "/admin/settings", icon: Settings },
 ];
 
 export function AdminSidebar() {
