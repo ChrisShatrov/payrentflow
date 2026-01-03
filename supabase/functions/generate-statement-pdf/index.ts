@@ -337,20 +337,14 @@ serve(async (req) => {
 </html>
     `;
 
-    // Convert HTML to PDF using a simple data URL approach
-    // Store HTML as a data URL that can be rendered as PDF by the browser
-    const base64Html = btoa(unescape(encodeURIComponent(html)));
-    const pdfDataUrl = `data:text/html;base64,${base64Html}`;
-
-    // Update statement with the PDF URL
+    // Mark statement as having PDF generated
     const { error: updateError } = await supabase
       .from("statements")
-      .update({ pdf_url: pdfDataUrl })
+      .update({ pdf_url: "generated" })
       .eq("id", statement_id);
 
     if (updateError) {
       console.error("Error updating statement:", updateError);
-      throw updateError;
     }
 
     console.log(`PDF generated successfully for statement ${statement_id}`);
@@ -358,8 +352,8 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true, 
-        pdf_url: pdfDataUrl,
-        message: "PDF generated successfully" 
+        html: html,
+        message: "Statement generated successfully" 
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
