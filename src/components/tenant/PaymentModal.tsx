@@ -30,8 +30,9 @@ interface PaymentModalProps {
 }
 
 // Fee constants (must match edge function)
-const CARD_FEE_PERCENT = 3.5;
-const ACH_FEE_FLAT = 3;
+const CARD_FEE_PERCENT = 3.75;
+const ACH_FEE_FLAT = 5;
+const SERVICE_CHARGE = 25;
 const SPLIT_PAYMENT_FEE = 30;
 
 export function PaymentModal({ 
@@ -46,22 +47,23 @@ export function PaymentModal({
 
   // Calculate fees dynamically
   const calculateFees = () => {
-    if (!statement) return { processingFee: 0, splitFee: 0, total: 0 };
+    if (!statement) return { paymentMethodFee: 0, serviceCharge: SERVICE_CHARGE, splitFee: 0, total: 0 };
 
     const baseAmount = Number(statement.total_due);
-    let processingFee = 0;
+    let paymentMethodFee = 0;
 
     if (paymentMethod === "card") {
-      processingFee = baseAmount * (CARD_FEE_PERCENT / 100);
+      paymentMethodFee = baseAmount * (CARD_FEE_PERCENT / 100);
     } else {
-      processingFee = ACH_FEE_FLAT;
+      paymentMethodFee = ACH_FEE_FLAT;
     }
 
     const splitFee = allowSplitPayment ? SPLIT_PAYMENT_FEE : 0;
-    const total = baseAmount + processingFee + splitFee;
+    const total = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
 
     return {
-      processingFee: Math.round(processingFee * 100) / 100,
+      paymentMethodFee: Math.round(paymentMethodFee * 100) / 100,
+      serviceCharge: SERVICE_CHARGE,
       splitFee,
       total: Math.round(total * 100) / 100,
     };
@@ -184,16 +186,35 @@ export function PaymentModal({
 
               <Separator className="my-2" />
 
-              <div className="flex justify-between font-semibold text-lg">
-                <span>Total Due</span>
-                <span className="text-primary">${Number(statement.total_due).toFixed(2)}</span>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Subtotal</span>
+                <span>${Number(statement.total_due).toFixed(2)}</span>
               </div>
+
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">
+                  {paymentMethod === "card" ? `Card Fee (${CARD_FEE_PERCENT}%)` : "ACH Fee"}
+                </span>
+                <span>${fees.paymentMethodFee.toFixed(2)}</span>
+              </div>
+
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Service Charge</span>
+                <span>${fees.serviceCharge.toFixed(2)}</span>
+              </div>
+
+              {allowSplitPayment && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Split Payment Fee</span>
+                  <span>${fees.splitFee.toFixed(2)}</span>
+                </div>
+              )}
 
               <Separator className="my-2" />
 
-              <div className="text-xs text-muted-foreground">
-                A {paymentMethod === "card" ? `${CARD_FEE_PERCENT}% processing fee` : `$${ACH_FEE_FLAT} processing fee`} will be added by Stripe at checkout.
-                {allowSplitPayment && ` A $${SPLIT_PAYMENT_FEE} split payment fee also applies.`}
+              <div className="flex justify-between font-semibold text-lg">
+                <span>Total</span>
+                <span className="text-primary">${fees.total.toFixed(2)}</span>
               </div>
             </div>
           </Card>
@@ -218,7 +239,7 @@ export function PaymentModal({
                 Processing...
               </>
             ) : (
-              `Pay $${Number(statement.total_due).toFixed(2)}`
+              `Pay $${fees.total.toFixed(2)}`
             )}
           </Button>
         </div>
