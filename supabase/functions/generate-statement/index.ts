@@ -39,7 +39,6 @@ serve(async (req) => {
     const baseRent = Number(unit.monthly_rent)
     let additionalFees = 0
     let lateFee = 0
-    let splitFee = 0
 
     // Calculate late fee if overdue
     const today = new Date()
@@ -62,13 +61,10 @@ serve(async (req) => {
       console.log(`Applied late fee: ${lateFee} (one-time + ${daysLate} days × $${unit.daily_late_fee})`);
     }
 
-    // Add split fee if enabled
-    if (unit.allow_split_payment) {
-      splitFee = 49
-      console.log("Applied split payment fee: 49");
-    }
+    // Note: Split payment fee and processing fees are NOT included in statement
+    // They are calculated dynamically at payment time and handled by Stripe
 
-    const totalDue = baseRent + additionalFees + lateFee + splitFee
+    const totalDue = baseRent + additionalFees + lateFee
 
     // Check if statement already exists
     const { data: existingStatement } = await supabaseClient
@@ -89,7 +85,6 @@ serve(async (req) => {
           base_rent: baseRent,
           additional_fees: additionalFees,
           late_fee: lateFee,
-          split_fee: splitFee,
           total_due: totalDue,
           status: today > dueDate ? 'overdue' : 'unpaid'
         })
@@ -113,7 +108,6 @@ serve(async (req) => {
           base_rent: baseRent,
           additional_fees: additionalFees,
           late_fee: lateFee,
-          split_fee: splitFee,
           total_due: totalDue,
           status: today > dueDate ? 'overdue' : 'unpaid'
         })

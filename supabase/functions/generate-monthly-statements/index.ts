@@ -47,7 +47,6 @@ serve(async (req) => {
           // Update existing statement
           const baseRent = Number(unit.monthly_rent)
           let lateFee = 0
-          let splitFee = 0
 
           const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
 
@@ -59,18 +58,15 @@ serve(async (req) => {
             }
           }
 
-          if (unit.allow_split_payment) {
-            splitFee = 49
-          }
-
-          const totalDue = baseRent + lateFee + splitFee
+          // Note: Split payment fee and processing fees are NOT included
+          // They are calculated dynamically at payment time
+          const totalDue = baseRent + lateFee
 
           await supabaseClient
             .from('statements')
             .update({
               base_rent: baseRent,
               late_fee: lateFee,
-              split_fee: splitFee,
               total_due: totalDue,
               status: today > dueDate ? 'overdue' : 'unpaid'
             })
@@ -82,7 +78,6 @@ serve(async (req) => {
           // Create new statement
           const baseRent = Number(unit.monthly_rent)
           let lateFee = 0
-          let splitFee = 0
 
           const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
 
@@ -94,11 +89,9 @@ serve(async (req) => {
             }
           }
 
-          if (unit.allow_split_payment) {
-            splitFee = 49
-          }
-
-          const totalDue = baseRent + lateFee + splitFee
+          // Note: Split payment fee and processing fees are NOT included
+          // They are calculated dynamically at payment time
+          const totalDue = baseRent + lateFee
 
           await supabaseClient
             .from('statements')
@@ -108,7 +101,6 @@ serve(async (req) => {
               base_rent: baseRent,
               additional_fees: 0,
               late_fee: lateFee,
-              split_fee: splitFee,
               total_due: totalDue,
               status: today > dueDate ? 'overdue' : 'unpaid'
             })
