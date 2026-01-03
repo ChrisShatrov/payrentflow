@@ -74,6 +74,24 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Track changes for email notification
+      const changes: string[] = [];
+      if (formData.monthly_rent !== unit.monthly_rent) {
+        changes.push(`Monthly rent changed from $${unit.monthly_rent} to $${formData.monthly_rent}`);
+      }
+      if (formData.due_day !== unit.due_day) {
+        changes.push(`Due day changed from ${unit.due_day} to ${formData.due_day}`);
+      }
+      if (formData.late_fee_amount !== unit.late_fee_amount) {
+        changes.push(`Late fee changed from $${unit.late_fee_amount} to $${formData.late_fee_amount}`);
+      }
+      if (formData.daily_late_fee !== unit.daily_late_fee) {
+        changes.push(`Daily late fee changed from $${unit.daily_late_fee} to $${formData.daily_late_fee}`);
+      }
+      if (formData.allow_split_payment !== unit.allow_split_payment) {
+        changes.push(`Split payments ${formData.allow_split_payment ? 'enabled' : 'disabled'}`);
+      }
+
       const { error } = await supabase
         .from("units")
         .update({
@@ -86,6 +104,36 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         .eq("id", unit.id);
 
       if (error) throw error;
+
+      // Send notification if there are changes and tenant is assigned
+      if (changes.length > 0 && unit.tenant_id) {
+        // Get property info for the email
+        const { data: unitData } = await supabase
+          .from("units")
+          .select(`
+            property_id,
+            properties!inner(name, landlord_id)
+          `)
+          .eq("id", unit.id)
+          .single();
+
+        if (unitData) {
+          const property = unitData.properties as any;
+          // Fire and forget - don't block on email
+          supabase.functions.invoke("send-notification-email", {
+            body: {
+              type: "unit_updated",
+              tenant_id: unit.tenant_id,
+              landlord_id: property?.landlord_id,
+              data: {
+                unit_number: unit.unit_number,
+                property_name: property?.name,
+                changes,
+              },
+            },
+          }).catch(console.error);
+        }
+      }
 
       toast.success("Unit updated successfully");
       setIsEditing(false);

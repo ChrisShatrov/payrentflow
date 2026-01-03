@@ -9,13 +9,46 @@ const logStep = (step: string, details?: unknown) => {
   console.log(`[STRIPE-WEBHOOK] ${step}${detailsStr}`);
 };
 
+// Helper function to send notification emails
+async function sendNotificationEmail(
+  supabaseUrl: string,
+  supabaseAnonKey: string,
+  type: string,
+  tenant_id: string | null,
+  landlord_id: string | null,
+  data: Record<string, unknown>
+) {
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/send-notification-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({ type, tenant_id, landlord_id, data }),
+    });
+    
+    if (!response.ok) {
+      const error = await response.text();
+      logStep("Failed to send notification email", { error });
+    } else {
+      logStep("Notification email sent successfully", { type });
+    }
+  } catch (error) {
+    logStep("Error sending notification email", { error: String(error) });
+  }
+}
+
 serve(async (req) => {
   const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") || "", {
     apiVersion: "2025-08-27.basil",
   });
 
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  
   const supabaseAdmin = createClient(
-    Deno.env.get("SUPABASE_URL") ?? "",
+    supabaseUrl,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     { auth: { persistSession: false } }
   );
@@ -84,10 +117,20 @@ serve(async (req) => {
         });
       }
 
-      // Find the payment in our database
+      // Find the payment in our database with unit and property info
       const { data: payment, error: paymentError } = await supabaseAdmin
         .from("payments")
-        .select("*, statements(*)")
+        .select(`
+          *,
+          statements(*),
+          units!inner(
+            id,
+            unit_number,
+            tenant_id,
+            property_id,
+            properties!inner(id, name, landlord_id)
+          )
+        `)
         .eq("stripe_payment_id", stripePaymentId)
         .single();
 
@@ -116,10 +159,10 @@ serve(async (req) => {
         .update({
           status: "failed",
           failed_at: new Date().toISOString(),
-          failed_ach_fee_applied: true, // Set flag BEFORE adding fee to prevent race conditions
+          failed_ach_fee_applied: true,
         })
         .eq("id", payment.id)
-        .eq("failed_ach_fee_applied", false); // Only update if flag is still false (optimistic lock)
+        .eq("failed_ach_fee_applied", false);
 
       if (updatePaymentError) {
         logStep("ERROR: Failed to update payment", { error: updatePaymentError.message });
@@ -129,12 +172,13 @@ serve(async (req) => {
         });
       }
 
+      let newTotalDue = 0;
+
       // Add $10 failed ACH fee to the statement's additional_fees
       if (payment.statement_id) {
         const currentAdditionalFees = payment.statements?.additional_fees || 0;
         const newAdditionalFees = currentAdditionalFees + FAILED_ACH_FEE;
 
-        // Get current statement to recalculate total
         const { data: statement, error: statementFetchError } = await supabaseAdmin
           .from("statements")
           .select("*")
@@ -144,14 +188,14 @@ serve(async (req) => {
         if (statementFetchError || !statement) {
           logStep("ERROR: Failed to fetch statement", { error: statementFetchError?.message });
         } else {
-          const newTotalDue = statement.base_rent + (statement.late_fee || 0) + newAdditionalFees;
+          newTotalDue = statement.base_rent + (statement.late_fee || 0) + newAdditionalFees;
 
           const { error: updateStatementError } = await supabaseAdmin
             .from("statements")
             .update({
               additional_fees: newAdditionalFees,
               total_due: newTotalDue,
-              status: "unpaid", // Reset to unpaid since payment failed
+              status: "unpaid",
             })
             .eq("id", payment.statement_id);
 
@@ -167,8 +211,24 @@ serve(async (req) => {
             });
           }
         }
-      } else {
-        logStep("No statement linked to payment", { paymentId: payment.id });
+      }
+
+      // Send payment failed notification to both tenant and landlord
+      const unit = payment.units as any;
+      if (unit) {
+        await sendNotificationEmail(
+          supabaseUrl,
+          supabaseAnonKey,
+          "payment_failed",
+          unit.tenant_id,
+          unit.properties?.landlord_id,
+          {
+            amount: payment.amount,
+            unit_number: unit.unit_number,
+            property_name: unit.properties?.name,
+            total_due: newTotalDue,
+          }
+        );
       }
 
       return new Response(JSON.stringify({ received: true, action: "fee_applied" }), {
@@ -191,10 +251,20 @@ serve(async (req) => {
       if (stripePaymentId) {
         logStep("Payment succeeded", { stripePaymentId });
 
-        // Find and update the payment
+        // Find and update the payment with unit/property info
         const { data: payment, error: paymentError } = await supabaseAdmin
           .from("payments")
-          .select("*")
+          .select(`
+            *,
+            statements(period_month),
+            units!inner(
+              id,
+              unit_number,
+              tenant_id,
+              property_id,
+              properties!inner(id, name, landlord_id)
+            )
+          `)
           .eq("stripe_payment_id", stripePaymentId)
           .single();
 
@@ -218,6 +288,25 @@ serve(async (req) => {
               paymentId: payment.id,
               statementId: payment.statement_id,
             });
+          }
+
+          // Send payment success notification to both tenant and landlord
+          const unit = payment.units as any;
+          const statement = payment.statements as any;
+          if (unit) {
+            await sendNotificationEmail(
+              supabaseUrl,
+              supabaseAnonKey,
+              "payment_success",
+              unit.tenant_id,
+              unit.properties?.landlord_id,
+              {
+                amount: payment.amount,
+                unit_number: unit.unit_number,
+                property_name: unit.properties?.name,
+                period_month: statement?.period_month,
+              }
+            );
           }
         }
       }

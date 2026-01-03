@@ -6,6 +6,36 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Helper function to send notification emails
+async function sendNotificationEmail(
+  supabaseUrl: string,
+  supabaseAnonKey: string,
+  type: string,
+  tenant_id: string | null,
+  landlord_id: string | null,
+  data: Record<string, unknown>
+) {
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/send-notification-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({ type, tenant_id, landlord_id, data }),
+    });
+    
+    if (!response.ok) {
+      const error = await response.text();
+      console.log("Failed to send notification email:", error);
+    } else {
+      console.log("Notification email sent successfully:", type);
+    }
+  } catch (error) {
+    console.log("Error sending notification email:", error);
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
@@ -16,15 +46,21 @@ serve(async (req) => {
     
     console.log(`Generating statement for unit ${unit_id}, period ${period_month}`);
 
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    
     const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
+      supabaseUrl,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Get unit details
+    // Get unit details with property info
     const { data: unit, error: unitError } = await supabaseClient
       .from('units')
-      .select('*')
+      .select(`
+        *,
+        properties!inner(id, name, landlord_id)
+      `)
       .eq('id', unit_id)
       .single()
 
@@ -39,6 +75,20 @@ serve(async (req) => {
     const baseRent = Number(unit.monthly_rent)
     let additionalFees = 0
     let lateFee = 0
+    let previousLateFee = 0
+
+    // Check for existing statement to track late fee changes
+    const { data: existingStatement } = await supabaseClient
+      .from('statements')
+      .select('*')
+      .eq('unit_id', unit_id)
+      .eq('period_month', period_month)
+      .single()
+
+    if (existingStatement) {
+      previousLateFee = existingStatement.late_fee || 0;
+      additionalFees = existingStatement.additional_fees || 0;
+    }
 
     // Calculate late fee if overdue
     const today = new Date()
@@ -61,20 +111,11 @@ serve(async (req) => {
       console.log(`Applied late fee: ${lateFee} (one-time + ${daysLate} days × $${unit.daily_late_fee})`);
     }
 
-    // Note: Split payment fee and processing fees are NOT included in statement
-    // They are calculated dynamically at payment time and handled by Stripe
-
     const totalDue = baseRent + additionalFees + lateFee
 
-    // Check if statement already exists
-    const { data: existingStatement } = await supabaseClient
-      .from('statements')
-      .select('*')
-      .eq('unit_id', unit_id)
-      .eq('period_month', period_month)
-      .single()
-
     let statement
+    const isNewStatement = !existingStatement;
+    const lateFeeIncreased = lateFee > previousLateFee;
 
     if (existingStatement) {
       // Update existing statement
@@ -122,6 +163,43 @@ serve(async (req) => {
     }
 
     console.log("Statement generated successfully:", statement.id);
+
+    // Send notification emails
+    const property = unit.properties as any;
+    
+    if (isNewStatement) {
+      // Send new statement notification
+      await sendNotificationEmail(
+        supabaseUrl,
+        supabaseAnonKey,
+        "statement_generated",
+        unit.tenant_id,
+        property?.landlord_id,
+        {
+          unit_number: unit.unit_number,
+          property_name: property?.name,
+          period_month,
+          total_due: totalDue * 100, // Convert to cents for email template
+        }
+      );
+    } else if (lateFeeIncreased && lateFee > 0) {
+      // Send late fee notification
+      await sendNotificationEmail(
+        supabaseUrl,
+        supabaseAnonKey,
+        "late_fee_applied",
+        unit.tenant_id,
+        property?.landlord_id,
+        {
+          unit_number: unit.unit_number,
+          property_name: property?.name,
+          period_month,
+          late_fee: lateFee * 100, // Convert to cents
+          daily_late_fee: Number(unit.daily_late_fee || 0) * 100,
+          total_due: totalDue * 100,
+        }
+      );
+    }
 
     return new Response(
       JSON.stringify(statement),
