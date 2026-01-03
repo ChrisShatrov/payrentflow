@@ -9,7 +9,7 @@ const navItems = [
   { title: "Tenants", url: "/admin/tenants", icon: Users },
   { title: "Statements", url: "/admin/statements", icon: FileText },
   { title: "Settings", url: "/admin/settings", icon: Settings },
-];
+] as const;
 
 export function AdminSidebar() {
   const { signOut } = useAuth();
