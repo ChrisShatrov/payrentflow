@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.send-notification-email]
 verify_jwt = false
+
+[functions.send-tenant-email]
+verify_jwt = false
