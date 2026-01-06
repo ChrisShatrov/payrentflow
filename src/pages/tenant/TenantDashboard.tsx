@@ -22,6 +22,11 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { format, differenceInDays, parseISO } from "date-fns";
 import { PaymentModal } from "@/components/tenant/PaymentModal";
+import { DocumentsModal } from "@/components/tenant/DocumentsModal";
+import { MaintenanceModal } from "@/components/tenant/MaintenanceModal";
+import { ContactModal } from "@/components/tenant/ContactModal";
+import { TenantSettingsModal } from "@/components/tenant/TenantSettingsModal";
+import { HelpModal } from "@/components/tenant/HelpModal";
 
 interface UnitData {
   id: string;
@@ -62,6 +67,12 @@ export default function TenantDashboard() {
   const [totalPaid, setTotalPaid] = useState(0);
   const [loading, setLoading] = useState(true);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [documentsModalOpen, setDocumentsModalOpen] = useState(false);
+  const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [helpModalOpen, setHelpModalOpen] = useState(false);
+  const [tenantProfile, setTenantProfile] = useState<{ full_name: string; email: string } | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -71,6 +82,17 @@ export default function TenantDashboard() {
 
   const fetchTenantData = async () => {
     try {
+      // Fetch tenant profile
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("full_name, email")
+        .eq("id", user?.id)
+        .single();
+      
+      if (profileData) {
+        setTenantProfile(profileData);
+      }
+
       // Fetch tenant's unit with property info
       const { data: unitData } = await supabase
         .from("units")
@@ -174,13 +196,35 @@ export default function TenantDashboard() {
     return today > dueDate;
   };
 
+  const handleQuickAction = (label: string) => {
+    switch (label) {
+      case "Documents":
+        setDocumentsModalOpen(true);
+        break;
+      case "Maintenance":
+        setMaintenanceModalOpen(true);
+        break;
+      case "Contact":
+        setContactModalOpen(true);
+        break;
+      case "Settings":
+        setSettingsModalOpen(true);
+        break;
+      case "Help":
+        setHelpModalOpen(true);
+        break;
+      default:
+        break;
+    }
+  };
+
   const quickActions = [
     { label: "Payment Methods", icon: CreditCard, href: "/tenant/payments" },
-    { label: "Documents", icon: FileText, href: "/tenant/documents" },
-    { label: "Maintenance", icon: Wrench, href: "/tenant/maintenance" },
-    { label: "Contact", icon: MessageSquare, href: "/tenant/contact" },
-    { label: "Settings", icon: Settings, href: "/tenant/settings" },
-    { label: "Help", icon: HelpCircle, href: "/tenant/help" },
+    { label: "Documents", icon: FileText, action: () => handleQuickAction("Documents") },
+    { label: "Maintenance", icon: Wrench, action: () => handleQuickAction("Maintenance") },
+    { label: "Contact", icon: MessageSquare, action: () => handleQuickAction("Contact") },
+    { label: "Settings", icon: Settings, action: () => handleQuickAction("Settings") },
+    { label: "Help", icon: HelpCircle, action: () => handleQuickAction("Help") },
   ];
 
   const daysUntilDue = getDaysUntilDue();
@@ -369,6 +413,7 @@ export default function TenantDashboard() {
               <Card 
                 key={action.label}
                 className="p-4 hover:bg-muted/50 transition-colors cursor-pointer group"
+                onClick={'action' in action ? action.action : undefined}
               >
                 <div className="flex flex-col items-center text-center gap-2">
                   <div className="p-3 rounded-lg bg-muted group-hover:bg-primary/10 transition-colors">
@@ -494,6 +539,47 @@ export default function TenantDashboard() {
         onOpenChange={setPaymentModalOpen}
         statement={currentStatement}
         allowSplitPayment={unit?.allow_split_payment || false}
+      />
+
+      {/* Documents Modal */}
+      <DocumentsModal
+        open={documentsModalOpen}
+        onOpenChange={setDocumentsModalOpen}
+      />
+
+      {/* Maintenance Modal */}
+      <MaintenanceModal
+        open={maintenanceModalOpen}
+        onOpenChange={setMaintenanceModalOpen}
+        unitNumber={unit?.unit_number || ""}
+        propertyName={unit?.property?.name || ""}
+        tenantName={tenantProfile?.full_name || ""}
+        tenantEmail={tenantProfile?.email || ""}
+      />
+
+      {/* Contact Modal */}
+      <ContactModal
+        open={contactModalOpen}
+        onOpenChange={setContactModalOpen}
+        unitNumber={unit?.unit_number || ""}
+        propertyName={unit?.property?.name || ""}
+        tenantName={tenantProfile?.full_name || ""}
+        tenantEmail={tenantProfile?.email || ""}
+      />
+
+      {/* Settings Modal */}
+      <TenantSettingsModal
+        open={settingsModalOpen}
+        onOpenChange={setSettingsModalOpen}
+        currentEmail={tenantProfile?.email || user?.email || ""}
+      />
+
+      {/* Help Modal */}
+      <HelpModal
+        open={helpModalOpen}
+        onOpenChange={setHelpModalOpen}
+        tenantName={tenantProfile?.full_name || ""}
+        tenantEmail={tenantProfile?.email || ""}
       />
     </TenantLayout>
   );
