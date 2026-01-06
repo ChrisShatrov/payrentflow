@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { FileText, ExternalLink, File, Download, Loader2 } from "lucide-react";
+import { FileText, ExternalLink, File, Download, Loader2, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -15,20 +15,20 @@ interface DocumentsModalProps {
 
 export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: DocumentsModalProps) {
   const [loading, setLoading] = useState(false);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [showPdfViewer, setShowPdfViewer] = useState(false);
 
   const handleViewLease = async () => {
     if (!leaseUrl || !unitId) return;
     
     setLoading(true);
     try {
-      // Get auth session for the edge function
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         toast.error("Please sign in to view documents");
         return;
       }
 
-      // Call our edge function that proxies the PDF from our domain
       const response = await fetch(
         `https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/serve-lease-pdf?unitId=${unitId}`,
         {
@@ -45,11 +45,10 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
         return;
       }
 
-      // Create blob URL and open
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setPdfBlobUrl(url);
+      setShowPdfViewer(true);
     } catch (error) {
       console.error("Error viewing lease:", error);
       toast.error("Failed to load lease document");
@@ -57,6 +56,88 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
       setLoading(false);
     }
   };
+
+  const handleDownloadLease = async () => {
+    if (!leaseUrl || !unitId) return;
+    
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Please sign in to download documents");
+        return;
+      }
+
+      const response = await fetch(
+        `https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/serve-lease-pdf?unitId=${unitId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        toast.error("Failed to download lease document");
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lease-${unitId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      toast.success("Lease downloaded successfully");
+    } catch (error) {
+      console.error("Error downloading lease:", error);
+      toast.error("Failed to download lease document");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const closePdfViewer = () => {
+    setShowPdfViewer(false);
+    if (pdfBlobUrl) {
+      URL.revokeObjectURL(pdfBlobUrl);
+      setPdfBlobUrl(null);
+    }
+  };
+
+  // Full-screen PDF viewer
+  if (showPdfViewer && pdfBlobUrl) {
+    return (
+      <Dialog open={true} onOpenChange={closePdfViewer}>
+        <DialogContent className="max-w-5xl w-[95vw] h-[90vh] p-0 overflow-hidden">
+          <div className="flex flex-col h-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="font-semibold">Lease Agreement</h2>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleDownloadLease} disabled={loading}>
+                  <Download className="h-4 w-4 mr-1" />
+                  Download
+                </Button>
+                <Button variant="ghost" size="icon" onClick={closePdfViewer}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="flex-1 bg-muted">
+              <iframe
+                src={pdfBlobUrl}
+                className="w-full h-full border-0"
+                title="Lease Agreement PDF"
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -82,23 +163,35 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
                 </p>
               </div>
             </div>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              disabled={!leaseUrl || loading}
-              onClick={handleViewLease}
-            >
-              {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : leaseUrl ? (
-                <>
-                  <Download className="h-3.5 w-3.5 mr-1.5" />
-                  View
-                </>
-              ) : (
-                "Pending"
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                disabled={!leaseUrl || loading}
+                onClick={handleViewLease}
+              >
+                {loading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : leaseUrl ? (
+                  <>
+                    <FileText className="h-3.5 w-3.5 mr-1.5" />
+                    View
+                  </>
+                ) : (
+                  "Pending"
+                )}
+              </Button>
+              {leaseUrl && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  disabled={loading}
+                  onClick={handleDownloadLease}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
               )}
-            </Button>
+            </div>
           </div>
 
           {/* Statements Link */}
