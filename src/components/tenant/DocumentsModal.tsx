@@ -19,14 +19,21 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl }: DocumentsModalP
     
     setLoading(true);
     try {
-      // Download as blob to avoid ad blocker issues
+      // Download and open via anchor click to avoid popup blockers
       const { data, error } = await supabase.storage
         .from("leases")
         .download(leaseUrl);
       
       if (data) {
         const url = URL.createObjectURL(data);
-        window.open(url, "_blank");
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
       } else {
         console.error("Error downloading PDF:", error);
       }

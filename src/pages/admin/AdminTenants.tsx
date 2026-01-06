@@ -230,13 +230,20 @@ export default function AdminTenants() {
                               variant="outline"
                               size="sm"
                               onClick={async () => {
-                                // Download the PDF and open as blob to avoid ad blocker issues
+                                // Download and trigger download via anchor click
                                 const { data, error } = await supabase.storage
                                   .from("leases")
                                   .download(tenant.leaseUrl!);
                                 if (data) {
                                   const url = URL.createObjectURL(data);
-                                  window.open(url, "_blank");
+                                  const a = document.createElement("a");
+                                  a.href = url;
+                                  a.target = "_blank";
+                                  a.rel = "noopener noreferrer";
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                  setTimeout(() => URL.revokeObjectURL(url), 100);
                                 } else {
                                   console.error("Error downloading PDF:", error);
                                   toast.error("Failed to open lease document");
