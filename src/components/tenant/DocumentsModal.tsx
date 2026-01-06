@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { FileText, ExternalLink, File, Download } from "lucide-react";
+import { FileText, ExternalLink, File, Download, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 interface DocumentsModalProps {
   open: boolean;
@@ -10,9 +12,25 @@ interface DocumentsModalProps {
 }
 
 export function DocumentsModal({ open, onOpenChange, leaseUrl }: DocumentsModalProps) {
-  const handleViewLease = () => {
-    if (leaseUrl) {
-      window.open(leaseUrl, "_blank");
+  const [loading, setLoading] = useState(false);
+
+  const handleViewLease = async () => {
+    if (!leaseUrl) return;
+    
+    setLoading(true);
+    try {
+      // Generate fresh signed URL
+      const { data, error } = await supabase.storage
+        .from("leases")
+        .createSignedUrl(leaseUrl, 60 * 60); // 1 hour
+      
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank");
+      } else {
+        console.error("Error getting signed URL:", error);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -43,10 +61,12 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl }: DocumentsModalP
             <Button 
               variant="outline" 
               size="sm" 
-              disabled={!leaseUrl}
+              disabled={!leaseUrl || loading}
               onClick={handleViewLease}
             >
-              {leaseUrl ? (
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : leaseUrl ? (
                 <>
                   <Download className="h-3.5 w-3.5 mr-1.5" />
                   View
