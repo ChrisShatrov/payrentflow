@@ -15,7 +15,7 @@ interface DocumentsModalProps {
 
 export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: DocumentsModalProps) {
   const [loading, setLoading] = useState(false);
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfDataUrl, setPdfDataUrl] = useState<string | null>(null);
   const [showPdfViewer, setShowPdfViewer] = useState(false);
 
   const handleViewLease = async () => {
@@ -45,10 +45,15 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
         return;
       }
 
+      // Convert to base64 data URL instead of blob URL to avoid ad blockers
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      setPdfBlobUrl(url);
-      setShowPdfViewer(true);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        setPdfDataUrl(dataUrl);
+        setShowPdfViewer(true);
+      };
+      reader.readAsDataURL(blob);
     } catch (error) {
       console.error("Error viewing lease:", error);
       toast.error("Failed to load lease document");
@@ -102,14 +107,11 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
 
   const closePdfViewer = () => {
     setShowPdfViewer(false);
-    if (pdfBlobUrl) {
-      URL.revokeObjectURL(pdfBlobUrl);
-      setPdfBlobUrl(null);
-    }
+    setPdfDataUrl(null);
   };
 
   // Full-screen PDF viewer
-  if (showPdfViewer && pdfBlobUrl) {
+  if (showPdfViewer && pdfDataUrl) {
     return (
       <Dialog open={true} onOpenChange={closePdfViewer}>
         <DialogContent className="max-w-5xl w-[95vw] h-[90vh] p-0 overflow-hidden">
@@ -128,7 +130,7 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
             </div>
             <div className="flex-1 bg-muted">
               <iframe
-                src={pdfBlobUrl}
+                src={pdfDataUrl}
                 className="w-full h-full border-0"
                 title="Lease Agreement PDF"
               />
