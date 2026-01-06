@@ -150,14 +150,28 @@ export default function TenantDashboard() {
     }
   };
 
-  const getDaysUntilDue = () => {
-    if (!unit) return 0;
+  const getNextDueDate = () => {
+    if (!unit) return null;
     const today = new Date();
     const dueDate = new Date(today.getFullYear(), today.getMonth(), unit.due_day);
     if (dueDate < today) {
       dueDate.setMonth(dueDate.getMonth() + 1);
     }
-    return differenceInDays(dueDate, today);
+    return dueDate;
+  };
+
+  const getDaysUntilDue = () => {
+    const nextDue = getNextDueDate();
+    if (!nextDue) return 0;
+    return differenceInDays(nextDue, new Date());
+  };
+
+  const isPastDue = () => {
+    if (!unit || !currentStatement) return false;
+    if (currentStatement.status === "paid") return false;
+    const today = new Date();
+    const dueDate = new Date(today.getFullYear(), today.getMonth(), unit.due_day);
+    return today > dueDate;
   };
 
   const quickActions = [
@@ -170,6 +184,8 @@ export default function TenantDashboard() {
   ];
 
   const daysUntilDue = getDaysUntilDue();
+  const nextDueDate = getNextDueDate();
+  const pastDue = isPastDue();
   const rentDue = currentStatement?.total_due || unit?.monthly_rent || 0;
 
   if (loading) {
@@ -186,28 +202,43 @@ export default function TenantDashboard() {
     <TenantLayout>
       <div className="space-y-8 animate-fade-in">
         {/* Hero Payment Card */}
-        <Card className="relative overflow-hidden bg-primary p-8">
+        <Card className={`relative overflow-hidden p-8 ${pastDue ? 'bg-destructive' : 'bg-primary'}`}>
           <div className="relative z-10">
             {/* Status Badge */}
-            <div className="inline-flex items-center gap-2 rounded-full bg-primary-foreground/20 px-3 py-1.5 text-sm text-primary-foreground mb-4">
-              <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
-              {daysUntilDue > 0 
-                ? `Next payment in ${daysUntilDue} days` 
-                : daysUntilDue === 0 
-                  ? "Payment due today" 
-                  : `Payment overdue by ${Math.abs(daysUntilDue)} days`}
+            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm mb-4 ${
+              pastDue 
+                ? 'bg-destructive-foreground/20 text-destructive-foreground' 
+                : 'bg-primary-foreground/20 text-primary-foreground'
+            }`}>
+              <span className={`h-2 w-2 rounded-full ${pastDue ? 'bg-destructive-foreground' : 'bg-accent'} animate-pulse`} />
+              {pastDue 
+                ? `⚠️ Account Past Due` 
+                : daysUntilDue > 0 
+                  ? `Next payment in ${daysUntilDue} days` 
+                  : daysUntilDue === 0 
+                    ? "Payment due today" 
+                    : `Payment overdue by ${Math.abs(daysUntilDue)} days`}
             </div>
 
             <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
               <div>
-                <p className="text-primary-foreground/70 text-sm mb-1">Total Rent Due</p>
-                <p className="text-5xl font-bold text-primary-foreground tracking-tight">
+                <p className={`text-sm mb-1 ${pastDue ? 'text-destructive-foreground/70' : 'text-primary-foreground/70'}`}>
+                  {pastDue ? 'Past Due Balance' : 'Total Rent Due'}
+                </p>
+                <p className={`text-5xl font-bold tracking-tight ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                   ${rentDue.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                 </p>
-                <div className="flex items-center gap-2 mt-3 text-primary-foreground/80 text-sm">
-                  <TrendingUp className="h-4 w-4" />
-                  <span>On-time payment streak: 12 months</span>
-                </div>
+                {pastDue ? (
+                  <div className="flex items-center gap-2 mt-3 text-destructive-foreground/80 text-sm">
+                    <Clock className="h-4 w-4" />
+                    <span>Please make payment immediately to avoid additional fees</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 mt-3 text-primary-foreground/80 text-sm">
+                    <TrendingUp className="h-4 w-4" />
+                    <span>On-time payment streak: 12 months</span>
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-3">
@@ -225,33 +256,35 @@ export default function TenantDashboard() {
 
             {/* Fee Breakdown */}
             {currentStatement && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 mt-8 pt-6 border-t border-primary-foreground/20">
+              <div className={`grid grid-cols-2 sm:grid-cols-4 gap-6 mt-8 pt-6 border-t ${
+                pastDue ? 'border-destructive-foreground/20' : 'border-primary-foreground/20'
+              }`}>
                 <div>
-                  <p className="text-primary-foreground/60 text-xs uppercase tracking-wide mb-1">Base Rent</p>
-                  <p className="text-xl font-semibold text-primary-foreground">
+                  <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Base Rent</p>
+                  <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                     ${Number(currentStatement.base_rent).toLocaleString()}
                   </p>
                 </div>
                 {Number(currentStatement.additional_fees) > 0 && (
                   <div>
-                    <p className="text-primary-foreground/60 text-xs uppercase tracking-wide mb-1">Utilities</p>
-                    <p className="text-xl font-semibold text-primary-foreground">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Utilities</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                       ${Number(currentStatement.additional_fees).toLocaleString()}
                     </p>
                   </div>
                 )}
                 {Number(currentStatement.late_fee) > 0 && (
                   <div>
-                    <p className="text-primary-foreground/60 text-xs uppercase tracking-wide mb-1">Late Fee</p>
-                    <p className="text-xl font-semibold text-primary-foreground">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Late Fee</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                       ${Number(currentStatement.late_fee).toLocaleString()}
                     </p>
                   </div>
                 )}
                 {Number(currentStatement.split_fee) > 0 && (
                   <div>
-                    <p className="text-primary-foreground/60 text-xs uppercase tracking-wide mb-1">Split Fee</p>
-                    <p className="text-xl font-semibold text-primary-foreground">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Split Fee</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                       ${Number(currentStatement.split_fee).toLocaleString()}
                     </p>
                   </div>
@@ -261,7 +294,11 @@ export default function TenantDashboard() {
           </div>
 
           {/* Decorative background */}
-          <div className="absolute inset-0 bg-gradient-to-br from-primary via-primary to-primary/80" />
+          <div className={`absolute inset-0 bg-gradient-to-br ${
+            pastDue 
+              ? 'from-destructive via-destructive to-destructive/80' 
+              : 'from-primary via-primary to-primary/80'
+          }`} />
         </Card>
 
         {/* Stats Grid */}
@@ -292,18 +329,23 @@ export default function TenantDashboard() {
             <p className="text-xs text-muted-foreground mt-1">On-time payments</p>
           </Card>
 
-          <Card className="p-5">
+          <Card className={`p-5 ${pastDue ? 'border-destructive/50 bg-destructive/5' : ''}`}>
             <div className="flex items-start justify-between mb-3">
-              <div className="p-2 rounded-lg bg-muted">
-                <Calendar className="h-5 w-5 text-muted-foreground" />
+              <div className={`p-2 rounded-lg ${pastDue ? 'bg-destructive/10' : 'bg-muted'}`}>
+                <Calendar className={`h-5 w-5 ${pastDue ? 'text-destructive' : 'text-muted-foreground'}`} />
               </div>
+              {pastDue && (
+                <span className="text-xs font-medium text-destructive bg-destructive/10 px-2 py-0.5 rounded">
+                  PAST DUE
+                </span>
+              )}
             </div>
             <p className="text-sm text-muted-foreground mb-1">Next Due Date</p>
-            <p className="text-2xl font-bold text-foreground">
-              {unit ? format(new Date(new Date().getFullYear(), new Date().getMonth(), unit.due_day), "MMM d") : "—"}
+            <p className={`text-2xl font-bold ${pastDue ? 'text-destructive' : 'text-foreground'}`}>
+              {nextDueDate ? format(nextDueDate, "MMM d") : "—"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {daysUntilDue > 0 ? `In ${daysUntilDue} days` : "Due soon"}
+              {daysUntilDue > 0 ? `In ${daysUntilDue} days` : daysUntilDue === 0 ? "Due today" : "Due soon"}
             </p>
           </Card>
 
