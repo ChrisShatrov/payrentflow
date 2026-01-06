@@ -14,9 +14,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+
 import { supabase } from "@/integrations/supabase/client";
-import { Users, Mail, Phone, FileText, X, Download, Loader2 } from "lucide-react";
+import { Users, Mail, Phone, FileText, Download, Loader2 } from "lucide-react";
 
 interface TenantData {
   id: string;
@@ -37,10 +37,7 @@ export default function AdminTenants() {
   const [loading, setLoading] = useState(true);
   const [leaseDialogOpen, setLeaseDialogOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<TenantData | null>(null);
-  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
-  const [pdfDataUrl, setPdfDataUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [viewingTenant, setViewingTenant] = useState<TenantData | null>(null);
+  const [downloadingTenantId, setDownloadingTenantId] = useState<string | null>(null);
 
   const fetchTenants = async () => {
     try {
@@ -118,15 +115,14 @@ export default function AdminTenants() {
     fetchTenants();
   }, []);
 
-  const handleViewLease = async (tenant: TenantData) => {
+  const handleDownloadLease = async (tenant: TenantData) => {
     if (!tenant.unitId || !tenant.leaseUrl) return;
     
-    setPdfLoading(true);
-    setViewingTenant(tenant);
+    setDownloadingTenantId(tenant.id);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        toast.error("Please sign in to view documents");
+        toast.error("Please sign in to download documents");
         return;
       }
 
@@ -140,42 +136,26 @@ export default function AdminTenants() {
       );
 
       if (!response.ok) {
-        toast.error("Failed to load lease document");
+        toast.error("Failed to download lease document");
         return;
       }
 
-      // Convert to base64 data URL to avoid ad blockers
       const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result as string;
-        setPdfDataUrl(dataUrl);
-        setPdfViewerOpen(true);
-      };
-      reader.readAsDataURL(blob);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lease-${tenant.full_name || tenant.email}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      toast.success("Lease downloaded successfully");
     } catch (error) {
-      console.error("Error viewing lease:", error);
-      toast.error("Failed to load lease document");
+      console.error("Error downloading lease:", error);
+      toast.error("Failed to download lease document");
     } finally {
-      setPdfLoading(false);
+      setDownloadingTenantId(null);
     }
-  };
-
-  const closePdfViewer = () => {
-    setPdfViewerOpen(false);
-    setViewingTenant(null);
-    setPdfDataUrl(null);
-  };
-
-  const handleDownloadLease = () => {
-    if (!pdfDataUrl || !viewingTenant) return;
-    const a = document.createElement("a");
-    a.href = pdfDataUrl;
-    a.download = `lease-${viewingTenant.full_name || viewingTenant.email}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    toast.success("Lease downloaded");
   };
 
   const getStatusBadge = (status: TenantData["status"]) => {
@@ -294,16 +274,16 @@ export default function AdminTenants() {
                             <Button
                               variant="outline"
                               size="sm"
-                              disabled={pdfLoading && viewingTenant?.id === tenant.id}
-                              onClick={() => handleViewLease(tenant)}
+                              disabled={downloadingTenantId === tenant.id}
+                              onClick={() => handleDownloadLease(tenant)}
                               className="gap-1.5"
                             >
-                              {pdfLoading && viewingTenant?.id === tenant.id ? (
+                              {downloadingTenantId === tenant.id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               ) : (
-                                <FileText className="h-3.5 w-3.5" />
+                                <Download className="h-3.5 w-3.5" />
                               )}
-                              View
+                              Download
                             </Button>
                           )}
                           <Button
@@ -342,36 +322,6 @@ export default function AdminTenants() {
           />
         )}
 
-        {/* PDF Viewer Dialog */}
-        <Dialog open={pdfViewerOpen} onOpenChange={closePdfViewer}>
-          <DialogContent className="max-w-5xl w-[95vw] h-[90vh] p-0 overflow-hidden">
-            <div className="flex flex-col h-full">
-              <div className="flex items-center justify-between p-4 border-b">
-                <h2 className="font-semibold">
-                  Lease Agreement - {viewingTenant?.full_name || viewingTenant?.email}
-                </h2>
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={handleDownloadLease}>
-                    <Download className="h-4 w-4 mr-1" />
-                    Download
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={closePdfViewer}>
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-              <div className="flex-1 bg-muted">
-                {pdfDataUrl && (
-                  <iframe
-                    src={pdfDataUrl}
-                    className="w-full h-full border-0"
-                    title="Lease Agreement PDF"
-                  />
-                )}
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
       </div>
     </AdminLayout>
   );
