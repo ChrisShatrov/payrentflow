@@ -230,22 +230,35 @@ export default function AdminTenants() {
                               variant="outline"
                               size="sm"
                               onClick={async () => {
-                                // Generate short-lived signed URL (60 seconds) - real HTTPS URL won't be blocked
-                                const { data, error } = await supabase.storage
-                                  .from("leases")
-                                  .createSignedUrl(tenant.leaseUrl!, 60);
-                                if (data?.signedUrl) {
-                                  const a = document.createElement("a");
-                                  a.href = data.signedUrl;
-                                  a.target = "_blank";
-                                  a.rel = "noopener noreferrer";
-                                  document.body.appendChild(a);
-                                  a.click();
-                                  document.body.removeChild(a);
-                                } else {
-                                  console.error("Error getting signed URL:", error);
-                                  toast.error("Failed to open lease document");
+                                // Get auth session for the edge function
+                                const { data: { session } } = await supabase.auth.getSession();
+                                if (!session) {
+                                  toast.error("Please sign in to view documents");
+                                  return;
                                 }
+
+                                // Call edge function that proxies the PDF from our domain
+                                const response = await fetch(
+                                  `https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/serve-lease-pdf?unitId=${tenant.unitId}`,
+                                  {
+                                    headers: {
+                                      Authorization: `Bearer ${session.access_token}`,
+                                    },
+                                  }
+                                );
+
+                                if (!response.ok) {
+                                  const error = await response.json();
+                                  console.error("Error fetching lease:", error);
+                                  toast.error("Failed to load lease document");
+                                  return;
+                                }
+
+                                // Create blob URL and open
+                                const blob = await response.blob();
+                                const url = URL.createObjectURL(blob);
+                                window.open(url, "_blank");
+                                setTimeout(() => URL.revokeObjectURL(url), 60000);
                               }}
                               className="gap-1.5"
                             >

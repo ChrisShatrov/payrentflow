@@ -548,6 +548,7 @@ export default function TenantDashboard() {
         open={documentsModalOpen}
         onOpenChange={setDocumentsModalOpen}
         leaseUrl={unit?.lease_pdf_url}
+        unitId={unit?.id}
       />
 
       {/* Maintenance Modal */}

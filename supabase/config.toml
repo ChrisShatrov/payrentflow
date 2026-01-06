@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.send-tenant-email]
 verify_jwt = false
+
+[functions.serve-lease-pdf]
+verify_jwt = false
