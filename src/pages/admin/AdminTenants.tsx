@@ -230,22 +230,20 @@ export default function AdminTenants() {
                               variant="outline"
                               size="sm"
                               onClick={async () => {
-                                // Download and trigger download via anchor click
+                                // Generate short-lived signed URL (60 seconds) - real HTTPS URL won't be blocked
                                 const { data, error } = await supabase.storage
                                   .from("leases")
-                                  .download(tenant.leaseUrl!);
-                                if (data) {
-                                  const url = URL.createObjectURL(data);
+                                  .createSignedUrl(tenant.leaseUrl!, 60);
+                                if (data?.signedUrl) {
                                   const a = document.createElement("a");
-                                  a.href = url;
+                                  a.href = data.signedUrl;
                                   a.target = "_blank";
                                   a.rel = "noopener noreferrer";
                                   document.body.appendChild(a);
                                   a.click();
                                   document.body.removeChild(a);
-                                  setTimeout(() => URL.revokeObjectURL(url), 100);
                                 } else {
-                                  console.error("Error downloading PDF:", error);
+                                  console.error("Error getting signed URL:", error);
                                   toast.error("Failed to open lease document");
                                 }
                               }}

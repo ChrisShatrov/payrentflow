@@ -19,23 +19,22 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl }: DocumentsModalP
     
     setLoading(true);
     try {
-      // Download and open via anchor click to avoid popup blockers
+      // Generate short-lived signed URL (60 seconds) - real HTTPS URL won't be blocked
       const { data, error } = await supabase.storage
         .from("leases")
-        .download(leaseUrl);
+        .createSignedUrl(leaseUrl, 60);
       
-      if (data) {
-        const url = URL.createObjectURL(data);
+      if (data?.signedUrl) {
+        // Use anchor click with real URL
         const a = document.createElement("a");
-        a.href = url;
+        a.href = data.signedUrl;
         a.target = "_blank";
         a.rel = "noopener noreferrer";
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 100);
       } else {
-        console.error("Error downloading PDF:", error);
+        console.error("Error getting signed URL:", error);
       }
     } finally {
       setLoading(false);
