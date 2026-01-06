@@ -34,6 +34,7 @@ interface UnitData {
   monthly_rent: number;
   due_day: number;
   allow_split_payment: boolean;
+  lease_pdf_url: string | null;
   property: {
     name: string;
     address: string;
@@ -102,6 +103,7 @@ export default function TenantDashboard() {
           monthly_rent,
           due_day,
           allow_split_payment,
+          lease_pdf_url,
           property:properties (
             name,
             address
@@ -545,6 +547,7 @@ export default function TenantDashboard() {
       <DocumentsModal
         open={documentsModalOpen}
         onOpenChange={setDocumentsModalOpen}
+        leaseUrl={unit?.lease_pdf_url}
       />
 
       {/* Maintenance Modal */}

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { AddTenantDialog } from "@/components/admin/AddTenantDialog";
 import { InviteTenantDialog } from "@/components/admin/InviteTenantDialog";
+import { UploadLeaseDialog } from "@/components/admin/UploadLeaseDialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -12,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { Users, Mail, Phone } from "lucide-react";
+import { Users, Mail, Phone, FileText } from "lucide-react";
 
 interface TenantData {
   id: string;
@@ -21,14 +23,18 @@ interface TenantData {
   phone: string | null;
   propertyName: string | null;
   unitNumber: string | null;
+  unitId: string | null;
   monthlyRent: number | null;
   status: "active" | "pending" | "inactive";
   totalOwed: number;
+  leaseUrl: string | null;
 }
 
 export default function AdminTenants() {
   const [tenants, setTenants] = useState<TenantData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [leaseDialogOpen, setLeaseDialogOpen] = useState(false);
+  const [selectedTenant, setSelectedTenant] = useState<TenantData | null>(null);
 
   const fetchTenants = async () => {
     try {
@@ -43,7 +49,7 @@ export default function AdminTenants() {
       // Fetch units with property info
       const { data: units, error: unitsError } = await supabase
         .from("units")
-        .select("id, tenant_id, unit_number, monthly_rent, property_id");
+        .select("id, tenant_id, unit_number, monthly_rent, property_id, lease_pdf_url");
 
       if (unitsError) throw unitsError;
 
@@ -86,9 +92,11 @@ export default function AdminTenants() {
           phone: profile.phone,
           propertyName: property?.name || null,
           unitNumber: unit?.unit_number || null,
+          unitId: unit?.id || null,
           monthlyRent: unit?.monthly_rent || null,
           status,
           totalOwed,
+          leaseUrl: unit?.lease_pdf_url || null,
         };
       });
 
@@ -159,6 +167,7 @@ export default function AdminTenants() {
                   <TableHead className="text-right">Monthly Rent</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Total Owed</TableHead>
+                  <TableHead className="text-center">Lease</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -212,11 +221,42 @@ export default function AdminTenants() {
                         <span className="text-muted-foreground">$0</span>
                       )}
                     </TableCell>
+                    <TableCell className="text-center">
+                      {tenant.unitId ? (
+                        <Button
+                          variant={tenant.leaseUrl ? "outline" : "secondary"}
+                          size="sm"
+                          onClick={() => {
+                            setSelectedTenant(tenant);
+                            setLeaseDialogOpen(true);
+                          }}
+                          className="gap-1.5"
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                          {tenant.leaseUrl ? "View" : "Upload"}
+                        </Button>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">—</span>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </div>
+        )}
+
+        {/* Lease Upload Dialog */}
+        {selectedTenant && selectedTenant.unitId && (
+          <UploadLeaseDialog
+            open={leaseDialogOpen}
+            onOpenChange={setLeaseDialogOpen}
+            unitId={selectedTenant.unitId}
+            unitNumber={selectedTenant.unitNumber || ""}
+            tenantName={selectedTenant.full_name || "Tenant"}
+            currentLeaseUrl={selectedTenant.leaseUrl}
+            onLeaseUploaded={fetchTenants}
+          />
         )}
       </div>
     </AdminLayout>

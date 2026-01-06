@@ -1,14 +1,21 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { FileText, ExternalLink, File } from "lucide-react";
+import { FileText, ExternalLink, File, Download } from "lucide-react";
 import { Link } from "react-router-dom";
 
 interface DocumentsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  leaseUrl?: string | null;
 }
 
-export function DocumentsModal({ open, onOpenChange }: DocumentsModalProps) {
+export function DocumentsModal({ open, onOpenChange, leaseUrl }: DocumentsModalProps) {
+  const handleViewLease = () => {
+    if (leaseUrl) {
+      window.open(leaseUrl, "_blank");
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -20,19 +27,33 @@ export function DocumentsModal({ open, onOpenChange }: DocumentsModalProps) {
         </DialogHeader>
         
         <div className="space-y-4 py-4">
-          {/* Lease Agreement - Coming Soon */}
+          {/* Lease Agreement */}
           <div className="flex items-center justify-between p-4 rounded-lg border bg-muted/30">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-muted">
-                <File className="h-5 w-5 text-muted-foreground" />
+              <div className={`p-2 rounded-lg ${leaseUrl ? "bg-primary/10" : "bg-muted"}`}>
+                <File className={`h-5 w-5 ${leaseUrl ? "text-primary" : "text-muted-foreground"}`} />
               </div>
               <div>
                 <p className="font-medium text-foreground">Lease Agreement</p>
-                <p className="text-xs text-muted-foreground">Coming soon</p>
+                <p className="text-xs text-muted-foreground">
+                  {leaseUrl ? "View your signed lease" : "Not yet uploaded"}
+                </p>
               </div>
             </div>
-            <Button variant="outline" size="sm" disabled>
-              View
+            <Button 
+              variant="outline" 
+              size="sm" 
+              disabled={!leaseUrl}
+              onClick={handleViewLease}
+            >
+              {leaseUrl ? (
+                <>
+                  <Download className="h-3.5 w-3.5 mr-1.5" />
+                  View
+                </>
+              ) : (
+                "Pending"
+              )}
             </Button>
           </div>
 

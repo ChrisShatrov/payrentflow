@@ -195,6 +195,7 @@ export type Database = {
           id: string
           late_fee_amount: number
           late_fee_type: string
+          lease_pdf_url: string | null
           monthly_rent: number
           property_id: string
           tenant_id: string | null
@@ -208,6 +209,7 @@ export type Database = {
           id?: string
           late_fee_amount?: number
           late_fee_type?: string
+          lease_pdf_url?: string | null
           monthly_rent: number
           property_id: string
           tenant_id?: string | null
@@ -221,6 +223,7 @@ export type Database = {
           id?: string
           late_fee_amount?: number
           late_fee_type?: string
+          lease_pdf_url?: string | null
           monthly_rent?: number
           property_id?: string
           tenant_id?: string | null
