@@ -19,15 +19,16 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl }: DocumentsModalP
     
     setLoading(true);
     try {
-      // Generate fresh signed URL
+      // Download as blob to avoid ad blocker issues
       const { data, error } = await supabase.storage
         .from("leases")
-        .createSignedUrl(leaseUrl, 60 * 60); // 1 hour
+        .download(leaseUrl);
       
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, "_blank");
+      if (data) {
+        const url = URL.createObjectURL(data);
+        window.open(url, "_blank");
       } else {
-        console.error("Error getting signed URL:", error);
+        console.error("Error downloading PDF:", error);
       }
     } finally {
       setLoading(false);
