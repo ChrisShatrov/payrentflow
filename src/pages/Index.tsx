@@ -53,13 +53,10 @@ const Index = () => {
 
               <div className="flex flex-col sm:flex-row items-start gap-4 mb-8 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
                 <Button size="lg" className="gap-2" asChild>
-                  <Link to="/auth">
-                    Start Free Trial
+                  <Link to="/auth?mode=signup">
+                    Start for Free
                     <ArrowRight className="w-4 h-4" />
                   </Link>
-                </Button>
-                <Button variant="outline" size="lg">
-                  Watch Demo
                 </Button>
               </div>
 
@@ -68,10 +65,6 @@ const Index = () => {
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-primary" />
                   No credit card required
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-primary" />
-                  14-day free trial
                 </div>
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-primary" />
