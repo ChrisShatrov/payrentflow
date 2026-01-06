@@ -82,7 +82,13 @@ export function TenantLayout({ children }: TenantLayoutProps) {
                     Profile
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => signOut()} className="text-destructive">
+                <DropdownMenuItem 
+                  onClick={async () => {
+                    await signOut();
+                    window.location.href = "/auth?mode=signin";
+                  }} 
+                  className="text-destructive"
+                >
                   <LogOut className="h-4 w-4 mr-2" />
                   Sign out
                 </DropdownMenuItem>

@@ -17,7 +17,7 @@ export function AdminSidebar() {
 
   const handleSignOut = async () => {
     await signOut();
-    navigate("/");
+    navigate("/auth?mode=signin");
   };
 
   return (
