@@ -38,7 +38,7 @@ export default function AdminTenants() {
   const [leaseDialogOpen, setLeaseDialogOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<TenantData | null>(null);
   const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfDataUrl, setPdfDataUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [viewingTenant, setViewingTenant] = useState<TenantData | null>(null);
 
@@ -144,10 +144,15 @@ export default function AdminTenants() {
         return;
       }
 
+      // Convert to base64 data URL to avoid ad blockers
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      setPdfBlobUrl(url);
-      setPdfViewerOpen(true);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        setPdfDataUrl(dataUrl);
+        setPdfViewerOpen(true);
+      };
+      reader.readAsDataURL(blob);
     } catch (error) {
       console.error("Error viewing lease:", error);
       toast.error("Failed to load lease document");
@@ -159,16 +164,13 @@ export default function AdminTenants() {
   const closePdfViewer = () => {
     setPdfViewerOpen(false);
     setViewingTenant(null);
-    if (pdfBlobUrl) {
-      URL.revokeObjectURL(pdfBlobUrl);
-      setPdfBlobUrl(null);
-    }
+    setPdfDataUrl(null);
   };
 
   const handleDownloadLease = () => {
-    if (!pdfBlobUrl || !viewingTenant) return;
+    if (!pdfDataUrl || !viewingTenant) return;
     const a = document.createElement("a");
-    a.href = pdfBlobUrl;
+    a.href = pdfDataUrl;
     a.download = `lease-${viewingTenant.full_name || viewingTenant.email}.pdf`;
     document.body.appendChild(a);
     a.click();
@@ -359,9 +361,9 @@ export default function AdminTenants() {
                 </div>
               </div>
               <div className="flex-1 bg-muted">
-                {pdfBlobUrl && (
+                {pdfDataUrl && (
                   <iframe
-                    src={pdfBlobUrl}
+                    src={pdfDataUrl}
                     className="w-full h-full border-0"
                     title="Lease Agreement PDF"
                   />
