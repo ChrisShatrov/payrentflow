@@ -223,18 +223,30 @@ export default function AdminTenants() {
                     </TableCell>
                     <TableCell className="text-center">
                       {tenant.unitId ? (
-                        <Button
-                          variant={tenant.leaseUrl ? "outline" : "secondary"}
-                          size="sm"
-                          onClick={() => {
-                            setSelectedTenant(tenant);
-                            setLeaseDialogOpen(true);
-                          }}
-                          className="gap-1.5"
-                        >
-                          <FileText className="h-3.5 w-3.5" />
-                          {tenant.leaseUrl ? "View" : "Upload"}
-                        </Button>
+                        <div className="flex items-center justify-center gap-1">
+                          {tenant.leaseUrl && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => window.open(tenant.leaseUrl!, "_blank")}
+                              className="gap-1.5"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              View
+                            </Button>
+                          )}
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedTenant(tenant);
+                              setLeaseDialogOpen(true);
+                            }}
+                            className="gap-1.5"
+                          >
+                            {tenant.leaseUrl ? "Replace" : "Upload"}
+                          </Button>
+                        </div>
                       ) : (
                         <span className="text-muted-foreground text-sm">—</span>
                       )}
