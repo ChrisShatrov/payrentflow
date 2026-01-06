@@ -252,6 +252,11 @@ export type Database = {
     }
     Functions: {
       is_admin: { Args: never; Returns: boolean }
+      landlord_owns_unit: { Args: { unit_id_text: string }; Returns: boolean }
+      tenant_assigned_to_unit: {
+        Args: { unit_id_text: string }
+        Returns: boolean
+      }
       tenant_has_access_to_property: {
         Args: { property_id: string }
         Returns: boolean
