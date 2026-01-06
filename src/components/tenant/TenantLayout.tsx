@@ -18,7 +18,6 @@ const navItems = [
   { label: "Dashboard", href: "/tenant", icon: Home },
   { label: "Statements", href: "/tenant/statements", icon: FileText },
   { label: "Payments", href: "/tenant/payments", icon: CreditCard },
-  { label: "Settings", href: "/tenant/settings", icon: Settings },
 ];
 
 export function TenantLayout({ children }: TenantLayoutProps) {
