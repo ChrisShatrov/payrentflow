@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { FileText, ExternalLink, File, Download, Loader2, X } from "lucide-react";
+import { FileText, ExternalLink, File, Download, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -15,52 +15,6 @@ interface DocumentsModalProps {
 
 export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: DocumentsModalProps) {
   const [loading, setLoading] = useState(false);
-  const [pdfDataUrl, setPdfDataUrl] = useState<string | null>(null);
-  const [showPdfViewer, setShowPdfViewer] = useState(false);
-
-  const handleViewLease = async () => {
-    if (!leaseUrl || !unitId) return;
-    
-    setLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast.error("Please sign in to view documents");
-        return;
-      }
-
-      const response = await fetch(
-        `https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/serve-lease-pdf?unitId=${unitId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        const error = await response.json();
-        console.error("Error fetching lease:", error);
-        toast.error("Failed to load lease document");
-        return;
-      }
-
-      // Convert to base64 data URL instead of blob URL to avoid ad blockers
-      const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result as string;
-        setPdfDataUrl(dataUrl);
-        setShowPdfViewer(true);
-      };
-      reader.readAsDataURL(blob);
-    } catch (error) {
-      console.error("Error viewing lease:", error);
-      toast.error("Failed to load lease document");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDownloadLease = async () => {
     if (!leaseUrl || !unitId) return;
@@ -105,42 +59,6 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
     }
   };
 
-  const closePdfViewer = () => {
-    setShowPdfViewer(false);
-    setPdfDataUrl(null);
-  };
-
-  // Full-screen PDF viewer
-  if (showPdfViewer && pdfDataUrl) {
-    return (
-      <Dialog open={true} onOpenChange={closePdfViewer}>
-        <DialogContent className="max-w-5xl w-[95vw] h-[90vh] p-0 overflow-hidden">
-          <div className="flex flex-col h-full">
-            <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="font-semibold">Lease Agreement</h2>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={handleDownloadLease} disabled={loading}>
-                  <Download className="h-4 w-4 mr-1" />
-                  Download
-                </Button>
-                <Button variant="ghost" size="icon" onClick={closePdfViewer}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-            <div className="flex-1 bg-muted">
-              <iframe
-                src={pdfDataUrl}
-                className="w-full h-full border-0"
-                title="Lease Agreement PDF"
-              />
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -161,39 +79,27 @@ export function DocumentsModal({ open, onOpenChange, leaseUrl, unitId }: Documen
               <div>
                 <p className="font-medium text-foreground">Lease Agreement</p>
                 <p className="text-xs text-muted-foreground">
-                  {leaseUrl ? "View your signed lease" : "Not yet uploaded"}
+                  {leaseUrl ? "Download your signed lease" : "Not yet uploaded"}
                 </p>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                disabled={!leaseUrl || loading}
-                onClick={handleViewLease}
-              >
-                {loading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : leaseUrl ? (
-                  <>
-                    <FileText className="h-3.5 w-3.5 mr-1.5" />
-                    View
-                  </>
-                ) : (
-                  "Pending"
-                )}
-              </Button>
-              {leaseUrl && (
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  disabled={loading}
-                  onClick={handleDownloadLease}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                </Button>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              disabled={!leaseUrl || loading}
+              onClick={handleDownloadLease}
+            >
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : leaseUrl ? (
+                <>
+                  <Download className="h-3.5 w-3.5 mr-1.5" />
+                  Download
+                </>
+              ) : (
+                "Pending"
               )}
-            </div>
+            </Button>
           </div>
 
           {/* Statements Link */}
