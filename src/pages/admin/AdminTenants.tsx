@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { AddTenantDialog } from "@/components/admin/AddTenantDialog";
 import { InviteTenantDialog } from "@/components/admin/InviteTenantDialog";
@@ -229,14 +230,16 @@ export default function AdminTenants() {
                               variant="outline"
                               size="sm"
                               onClick={async () => {
-                                // Generate fresh signed URL
+                                // Download the PDF and open as blob to avoid ad blocker issues
                                 const { data, error } = await supabase.storage
                                   .from("leases")
-                                  .createSignedUrl(tenant.leaseUrl!, 60 * 60); // 1 hour
-                                if (data?.signedUrl) {
-                                  window.open(data.signedUrl, "_blank");
+                                  .download(tenant.leaseUrl!);
+                                if (data) {
+                                  const url = URL.createObjectURL(data);
+                                  window.open(url, "_blank");
                                 } else {
-                                  console.error("Error getting signed URL:", error);
+                                  console.error("Error downloading PDF:", error);
+                                  toast.error("Failed to open lease document");
                                 }
                               }}
                               className="gap-1.5"
