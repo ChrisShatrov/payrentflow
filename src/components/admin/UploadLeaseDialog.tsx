@@ -69,17 +69,10 @@ export function UploadLeaseDialog({
 
       if (uploadError) throw uploadError;
 
-      // Get signed URL (valid for 1 year)
-      const { data: urlData, error: urlError } = await supabase.storage
-        .from("leases")
-        .createSignedUrl(filePath, 60 * 60 * 24 * 365);
-
-      if (urlError) throw urlError;
-
-      // Update unit with lease URL
+      // Store just the file path (not a signed URL)
       const { error: updateError } = await supabase
         .from("units")
-        .update({ lease_pdf_url: urlData.signedUrl })
+        .update({ lease_pdf_url: filePath })
         .eq("id", unitId);
 
       if (updateError) throw updateError;

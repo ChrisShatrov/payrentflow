@@ -228,7 +228,17 @@ export default function AdminTenants() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => window.open(tenant.leaseUrl!, "_blank")}
+                              onClick={async () => {
+                                // Generate fresh signed URL
+                                const { data, error } = await supabase.storage
+                                  .from("leases")
+                                  .createSignedUrl(tenant.leaseUrl!, 60 * 60); // 1 hour
+                                if (data?.signedUrl) {
+                                  window.open(data.signedUrl, "_blank");
+                                } else {
+                                  console.error("Error getting signed URL:", error);
+                                }
+                              }}
                               className="gap-1.5"
                             >
                               <FileText className="h-3.5 w-3.5" />
