@@ -249,6 +249,10 @@ export type Database = {
     }
     Functions: {
       is_admin: { Args: never; Returns: boolean }
+      tenant_has_access_to_property: {
+        Args: { property_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
