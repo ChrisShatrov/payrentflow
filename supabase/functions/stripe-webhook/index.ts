@@ -175,9 +175,11 @@ serve(async (req) => {
       let newTotalDue = 0;
 
       // Add $10 failed ACH fee to the statement's additional_fees
+      // Convert FAILED_ACH_FEE from cents to dollars (1000 cents = $10.00)
       if (payment.statement_id) {
         const currentAdditionalFees = payment.statements?.additional_fees || 0;
-        const newAdditionalFees = currentAdditionalFees + FAILED_ACH_FEE;
+        const failedAchFeeDollars = FAILED_ACH_FEE / 100; // Convert cents to dollars
+        const newAdditionalFees = currentAdditionalFees + failedAchFeeDollars;
 
         const { data: statement, error: statementFetchError } = await supabaseAdmin
           .from("statements")
@@ -237,38 +239,34 @@ serve(async (req) => {
       });
     }
 
-    // Handle successful payment (mark statement as paid)
-    if (event.type === "payment_intent.succeeded" || event.type === "charge.succeeded") {
-      const paymentIntent = event.type === "payment_intent.succeeded"
-        ? (event.data.object as Stripe.PaymentIntent)
-        : null;
-      const charge = event.type === "charge.succeeded"
-        ? (event.data.object as Stripe.Charge)
-        : null;
+    // Handle successful checkout session completion (primary event for Checkout Sessions)
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const sessionId = session.id;
+      const paymentIntentId = session.payment_intent as string | null;
 
-      const stripePaymentId = paymentIntent?.id || charge?.payment_intent;
+      logStep("Checkout session completed", { sessionId, paymentIntentId });
 
-      if (stripePaymentId) {
-        logStep("Payment succeeded", { stripePaymentId });
+      // Find payment by session ID (which is what we stored)
+      const { data: payment, error: paymentError } = await supabaseAdmin
+        .from("payments")
+        .select(`
+          *,
+          statements(period_month),
+          units!inner(
+            id,
+            unit_number,
+            tenant_id,
+            property_id,
+            properties!inner(id, name, landlord_id)
+          )
+        `)
+        .eq("stripe_payment_id", sessionId)
+        .single();
 
-        // Find and update the payment with unit/property info
-        const { data: payment, error: paymentError } = await supabaseAdmin
-          .from("payments")
-          .select(`
-            *,
-            statements(period_month),
-            units!inner(
-              id,
-              unit_number,
-              tenant_id,
-              property_id,
-              properties!inner(id, name, landlord_id)
-            )
-          `)
-          .eq("stripe_payment_id", stripePaymentId)
-          .single();
-
-        if (payment && !paymentError) {
+      if (payment && !paymentError) {
+        // Only update if not already completed (idempotency)
+        if (payment.status !== "completed") {
           await supabaseAdmin
             .from("payments")
             .update({
@@ -308,6 +306,119 @@ serve(async (req) => {
               }
             );
           }
+        } else {
+          logStep("Payment already marked as completed (idempotent)", { paymentId: payment.id });
+        }
+      } else {
+        logStep("Payment not found for session", { sessionId, error: paymentError?.message });
+      }
+    }
+
+    // Handle successful payment intent (fallback for direct payment intents)
+    if (event.type === "payment_intent.succeeded" || event.type === "charge.succeeded") {
+      const paymentIntent = event.type === "payment_intent.succeeded"
+        ? (event.data.object as Stripe.PaymentIntent)
+        : null;
+      const charge = event.type === "charge.succeeded"
+        ? (event.data.object as Stripe.Charge)
+        : null;
+
+      const paymentIntentId = paymentIntent?.id || charge?.payment_intent;
+
+      if (paymentIntentId) {
+        logStep("Payment intent succeeded", { paymentIntentId });
+
+        // Try to find payment by payment intent ID first
+        let { data: payment, error: paymentError } = await supabaseAdmin
+          .from("payments")
+          .select(`
+            *,
+            statements(period_month),
+            units!inner(
+              id,
+              unit_number,
+              tenant_id,
+              property_id,
+              properties!inner(id, name, landlord_id)
+            )
+          `)
+          .eq("stripe_payment_id", paymentIntentId)
+          .single();
+
+        // If not found, try to get the session from payment intent metadata and look up by session ID
+        if (paymentError && paymentIntent) {
+          // Retrieve the payment intent to get session ID from metadata if available
+          const fullPaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+          const sessionId = fullPaymentIntent.metadata?.session_id;
+          
+          if (sessionId) {
+            const result = await supabaseAdmin
+              .from("payments")
+              .select(`
+                *,
+                statements(period_month),
+                units!inner(
+                  id,
+                  unit_number,
+                  tenant_id,
+                  property_id,
+                  properties!inner(id, name, landlord_id)
+                )
+              `)
+              .eq("stripe_payment_id", sessionId)
+              .single();
+            payment = result.data;
+            paymentError = result.error;
+          }
+        }
+
+        if (payment && !paymentError) {
+          // Only update if not already completed (idempotency)
+          if (payment.status !== "completed") {
+            await supabaseAdmin
+              .from("payments")
+              .update({
+                status: "completed",
+                paid_at: new Date().toISOString(),
+              })
+              .eq("id", payment.id);
+
+            // Mark statement as paid
+            if (payment.statement_id) {
+              await supabaseAdmin
+                .from("statements")
+                .update({ status: "paid" })
+                .eq("id", payment.statement_id);
+
+              logStep("Payment and statement marked as paid", {
+                paymentId: payment.id,
+                statementId: payment.statement_id,
+              });
+            }
+
+            // Send payment success notification to both tenant and landlord
+            const unit = payment.units as any;
+            const statement = payment.statements as any;
+            if (unit) {
+              await sendNotificationEmail(
+                supabaseUrl,
+                supabaseAnonKey,
+                "payment_success",
+                unit.tenant_id,
+                unit.properties?.landlord_id,
+                {
+                  amount: payment.amount,
+                  unit_number: unit.unit_number,
+                  property_name: unit.properties?.name,
+                  period_month: statement?.period_month,
+                }
+              );
+            }
+          } else {
+            logStep("Payment already marked as completed (idempotent)", { paymentId: payment.id });
+          }
+        } else {
+          logStep("Payment not found for payment intent", { paymentIntentId, error: paymentError?.message });
         }
       }
     }

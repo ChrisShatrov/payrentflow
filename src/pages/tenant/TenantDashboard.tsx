@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { TenantLayout } from "@/components/tenant/TenantLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import { MaintenanceModal } from "@/components/tenant/MaintenanceModal";
 import { ContactModal } from "@/components/tenant/ContactModal";
 import { TenantSettingsModal } from "@/components/tenant/TenantSettingsModal";
 import { HelpModal } from "@/components/tenant/HelpModal";
+import { toast } from "sonner";
 
 interface UnitData {
   id: string;
@@ -62,6 +64,7 @@ interface PaymentData {
 
 export default function TenantDashboard() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [unit, setUnit] = useState<UnitData | null>(null);
   const [currentStatement, setCurrentStatement] = useState<StatementData | null>(null);
   const [recentPayments, setRecentPayments] = useState<PaymentData[]>([]);
@@ -80,6 +83,27 @@ export default function TenantDashboard() {
       fetchTenantData();
     }
   }, [user]);
+
+  // Handle payment redirects from Stripe
+  useEffect(() => {
+    const paymentStatus = searchParams.get("payment");
+    if (paymentStatus === "success") {
+      toast.success("Payment successful! Your payment is being processed.");
+      // Refresh data to show updated payment status
+      if (user) {
+        fetchTenantData();
+      }
+      // Clear the query parameter
+      searchParams.delete("payment");
+      searchParams.delete("statement_id");
+      setSearchParams(searchParams, { replace: true });
+    } else if (paymentStatus === "cancelled") {
+      toast.error("Payment was cancelled. You can try again anytime.");
+      // Clear the query parameter
+      searchParams.delete("payment");
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, user]);
 
   const fetchTenantData = async () => {
     try {

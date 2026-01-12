@@ -106,6 +106,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    // Clear inactivity tracking
+    localStorage.removeItem('last_activity_timestamp');
     await supabase.auth.signOut();
     setRole(null);
   };

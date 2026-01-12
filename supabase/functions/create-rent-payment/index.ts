@@ -238,6 +238,9 @@ serve(async (req) => {
     logStep("Checkout session created", { sessionId: session.id });
 
     // Create pending payment record
+    // Convert payment method to match database constraint (ACH/Card)
+    const paymentMethodDb = payment_method === "card" ? "Card" : "ACH";
+    
     const { error: paymentError } = await supabaseClient
       .from("payments")
       .insert({
@@ -245,7 +248,7 @@ serve(async (req) => {
         statement_id: statement_id,
         amount: totalAmount / 100,
         fee_amount: applicationFee / 100,
-        payment_method,
+        payment_method: paymentMethodDb,
         status: "pending",
         stripe_payment_id: session.id,
       });
