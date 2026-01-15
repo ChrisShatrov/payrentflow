@@ -44,6 +44,13 @@ function createStaticServer() {
 }
 
 async function prerender() {
+  // Skip pre-rendering on Vercel (Puppeteer doesn't work in Vercel's build environment)
+  if (process.env.VERCEL || process.env.CI) {
+    console.log('⏭️  Skipping pre-rendering (running on Vercel/CI - Puppeteer not available)');
+    console.log('ℹ️  Note: Vercel will handle SEO through Edge Functions or you can pre-render locally');
+    return;
+  }
+
   if (!existsSync(indexPath)) {
     console.error('❌ index.html not found. Run "npm run build" first.');
     process.exit(1);

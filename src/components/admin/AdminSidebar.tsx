@@ -29,7 +29,7 @@ export function AdminSidebar() {
     <aside className="w-64 min-h-screen bg-card border-r border-border flex flex-col">
       {/* Logo */}
       <div className="p-6 border-b border-border">
-        <h1 className="text-2xl font-bold">
+        <h1 className="text-3xl font-extrabold tracking-tight">
           <span className="text-primary">Rent</span>
           <span className="text-foreground">Flow</span>
         </h1>

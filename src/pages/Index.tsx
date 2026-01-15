@@ -8,12 +8,28 @@ const Index = () => {
   return (
     <>
       <Helmet>
-        <title>RentFlow — Online Rent Payments & Property Management</title>
+        <title>Online Rent Payments & Property Management Software | RentFlow</title>
         <meta
           name="description"
           content="Collect rent online, automate late fees, track payments, and manage properties all in one place. Trusted by 2,000+ property managers."
         />
         <link rel="canonical" href="https://www.payrentflow.com/" />
+        
+        {/* Open Graph / Facebook */}
+        <meta property="og:title" content="Online Rent Payments & Property Management Software | RentFlow" />
+        <meta property="og:description" content="Collect rent online, automate late fees, track payments, and manage properties all in one place. Trusted by 2,000+ property managers." />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://www.payrentflow.com/" />
+        <meta property="og:site_name" content="RentFlow" />
+        {/* TODO: Add og:image when you have a social sharing image */}
+        {/* <meta property="og:image" content="https://www.payrentflow.com/og-image.jpg" /> */}
+        
+        {/* Twitter Card */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Online Rent Payments & Property Management Software | RentFlow" />
+        <meta name="twitter:description" content="Collect rent online, automate late fees, track payments, and manage properties all in one place. Trusted by 2,000+ property managers." />
+        {/* TODO: Add twitter:image when you have a social sharing image */}
+        {/* <meta name="twitter:image" content="https://www.payrentflow.com/og-image.jpg" /> */}
       </Helmet>
       <div className="min-h-screen bg-background">
       {/* Header */}
@@ -90,6 +106,8 @@ const Index = () => {
                   src={heroImage} 
                   alt="Modern apartment building at sunset" 
                   className="w-full h-auto object-cover"
+                  loading="eager"
+                  fetchPriority="high"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-foreground/20 to-transparent" />
               </div>

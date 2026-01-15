@@ -8,20 +8,46 @@ import { HelmetProvider } from "react-helmet-async";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { useInactivityLogout } from "@/hooks/useInactivityLogout";
 import { supabase } from "@/integrations/supabase/client";
-import Index from "./pages/Index";
-import Auth from "./pages/Auth";
-import ResetPassword from "./pages/ResetPassword";
-import NotFound from "./pages/NotFound";
-import AdminDashboard from "./pages/admin/AdminDashboard";
-import AdminProperties from "./pages/admin/AdminProperties";
-import AdminTenants from "./pages/admin/AdminTenants";
-import AdminPayments from "./pages/admin/AdminPayments";
-import AdminStatements from "./pages/admin/AdminStatements";
-import AdminSettings from "./pages/admin/AdminSettings";
-import TenantDashboard from "./pages/tenant/TenantDashboard";
-import TenantStatements from "./pages/tenant/TenantStatements";
-import TenantPayments from "./pages/tenant/TenantPayments";
+import { lazy, Suspense } from "react";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+
+// Lazy load routes for code splitting (improves Core Web Vitals)
+const Index = lazy(() => import("./pages/Index"));
+const Auth = lazy(() => import("./pages/Auth"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
+const AdminProperties = lazy(() => import("./pages/admin/AdminProperties"));
+const AdminTenants = lazy(() => import("./pages/admin/AdminTenants"));
+const AdminPayments = lazy(() => import("./pages/admin/AdminPayments"));
+const AdminStatements = lazy(() => import("./pages/admin/AdminStatements"));
+const AdminSettings = lazy(() => import("./pages/admin/AdminSettings"));
+const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
+const TenantStatements = lazy(() => import("./pages/tenant/TenantStatements"));
+const TenantPayments = lazy(() => import("./pages/tenant/TenantPayments"));
+
+// Resources & Blog
+const Resources = lazy(() => import("./pages/Resources"));
+const HowToCollectRentOnline = lazy(() => import("./pages/blog/HowToCollectRentOnline"));
+const AreOnlineRentPaymentsSafe = lazy(() => import("./pages/blog/AreOnlineRentPaymentsSafe"));
+const HowToAutomateLateFees = lazy(() => import("./pages/blog/HowToAutomateLateFees"));
+
+// SEO Landing Pages - Lazy loaded for code splitting
+const PayRentOnline = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.PayRentOnline })));
+const RentPaymentApp = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.RentPaymentApp })));
+const PayRentWithCreditCard = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.PayRentWithCreditCard })));
+const PayRentWithDebitCard = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.PayRentWithDebitCard })));
+const PayRentWithACH = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.PayRentWithACH })));
+const PropertyManagementSoftware = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.PropertyManagementSoftware })));
+const RentCollectionSoftware = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.RentCollectionSoftware })));
+const TenantManagementSoftware = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.TenantManagementSoftware })));
+const LateFeeAutomation = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.LateFeeAutomation })));
+const Pricing = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.Pricing })));
+const Features = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.Features })));
+const HowItWorks = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.HowItWorks })));
+const Security = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.Security })));
+const Contact = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.Contact })));
+const About = lazy(() => import("./pages/SEOPages").then(m => ({ default: m.About })));
 
 const queryClient = new QueryClient();
 
@@ -170,16 +196,52 @@ const InactivityHandler = () => {
   return null;
 };
 
+// Loading component for lazy-loaded routes
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+  </div>
+);
+
 const AppRoutes = () => {
   // Initialize inactivity logout handler
   return (
     <>
       <InactivityHandler />
-      <Routes>
-        <Route path="/" element={<RoleBasedRedirect />} />
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
+          <Route path="/" element={<RoleBasedRedirect />} />
         <Route path="/auth" element={<Auth />} />
         <Route path="/signup" element={<Auth />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        
+        {/* SEO Landing Pages - Tenant Intent (High Volume) */}
+        <Route path="/pay-rent-online" element={<PayRentOnline />} />
+        <Route path="/rent-payment-app" element={<RentPaymentApp />} />
+        <Route path="/pay-rent-with-credit-card" element={<PayRentWithCreditCard />} />
+        <Route path="/pay-rent-with-debit-card" element={<PayRentWithDebitCard />} />
+        <Route path="/pay-rent-with-ach" element={<PayRentWithACH />} />
+        <Route path="/bank-transfer-rent-payment" element={<PayRentWithACH />} />
+        
+        {/* SEO Landing Pages - Landlord/Manager Intent (Higher Buying Intent) */}
+        <Route path="/property-management-software" element={<PropertyManagementSoftware />} />
+        <Route path="/rent-collection-software" element={<RentCollectionSoftware />} />
+        <Route path="/tenant-management-software" element={<TenantManagementSoftware />} />
+        <Route path="/late-fee-automation" element={<LateFeeAutomation />} />
+        
+        {/* SEO Landing Pages - Trust + Conversion */}
+        <Route path="/pricing" element={<Pricing />} />
+        <Route path="/features" element={<Features />} />
+        <Route path="/how-it-works" element={<HowItWorks />} />
+        <Route path="/security" element={<Security />} />
+        <Route path="/contact" element={<Contact />} />
+        <Route path="/about" element={<About />} />
+        
+        {/* Resources & Blog */}
+        <Route path="/resources" element={<Resources />} />
+        <Route path="/resources/how-to-collect-rent-online-ach-vs-card" element={<HowToCollectRentOnline />} />
+        <Route path="/resources/are-online-rent-payments-safe" element={<AreOnlineRentPaymentsSafe />} />
+        <Route path="/resources/how-to-automate-late-fees-legally" element={<HowToAutomateLateFees />} />
         
         {/* Admin Routes - Only accessible by admins */}
         <Route path="/admin" element={
@@ -232,7 +294,8 @@ const AppRoutes = () => {
         
         {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
         <Route path="*" element={<NotFound />} />
-      </Routes>
+        </Routes>
+      </Suspense>
     </>
   );
 };
