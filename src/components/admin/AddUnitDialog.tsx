@@ -44,6 +44,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
   const [monthlyRent, setMonthlyRent] = useState("");
   const [dueDay, setDueDay] = useState("1");
   const [allowSplitPayment, setAllowSplitPayment] = useState(false);
+  const [splitPaymentFee, setSplitPaymentFee] = useState("30.00");
   const [lateFeeAmount, setLateFeeAmount] = useState("0");
   const [dailyLateFee, setDailyLateFee] = useState("0");
 
@@ -55,27 +56,35 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
 
   const fetchTenants = async () => {
     try {
-      // Get tenants that are not assigned to any unit
-      const { data: assignedUnits } = await supabase
-        .from("units")
-        .select("tenant_id")
-        .not("tenant_id", "is", null);
+      // Use the database function to get only tenants with confirmed emails and no unit assigned
+      const { data, error } = await supabase.rpc('get_available_tenants' as any);
 
-      const assignedTenantIds = (assignedUnits || []).map((u) => u.tenant_id);
+      if (error) {
+        console.error("Error fetching available tenants:", error);
+        // Fallback: try the old method if function doesn't exist
+        const { data: assignedUnits } = await supabase
+          .from("units")
+          .select("tenant_id")
+          .not("tenant_id", "is", null);
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name, email")
-        .eq("role", "tenant");
+        const assignedTenantIds = (assignedUnits || []).map((u) => u.tenant_id);
 
-      if (error) throw error;
+        const { data: profilesData, error: profilesError } = await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .eq("role", "tenant");
 
-      // Filter out already assigned tenants
-      const availableTenants = (data || []).filter(
-        (t) => !assignedTenantIds.includes(t.id)
-      );
+        if (profilesError) throw profilesError;
 
-      setTenants(availableTenants);
+        const availableTenants = (profilesData || []).filter(
+          (t) => !assignedTenantIds.includes(t.id)
+        );
+
+        setTenants(availableTenants);
+        return;
+      }
+
+      setTenants(data || []);
     } catch (error) {
       console.error("Error fetching tenants:", error);
     }
@@ -109,6 +118,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
         monthly_rent: parseFloat(monthlyRent),
         due_day: dueDayNum,
         allow_split_payment: allowSplitPayment,
+        split_payment_fee: allowSplitPayment ? parseFloat(splitPaymentFee) || 30.00 : null,
         late_fee_amount: parseFloat(lateFeeAmount) || 0,
         daily_late_fee: parseFloat(dailyLateFee) || 0,
       });
@@ -133,6 +143,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
     setMonthlyRent("");
     setDueDay("1");
     setAllowSplitPayment(false);
+    setSplitPaymentFee("30.00");
     setLateFeeAmount("0");
     setDailyLateFee("0");
   };
@@ -190,7 +201,9 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                   <SelectItem value="__none__">No tenant</SelectItem>
                   {tenants.map((tenant) => (
                     <SelectItem key={tenant.id} value={tenant.id}>
-                      {tenant.full_name || tenant.email}
+                      {tenant.full_name 
+                        ? `${tenant.full_name} (${tenant.email})`
+                        : tenant.email}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -250,16 +263,36 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
               </div>
             </div>
 
-            <div className="flex items-center space-x-2 pt-2">
-              <Checkbox
-                id="allowSplitPayment"
-                checked={allowSplitPayment}
-                onCheckedChange={(checked) => setAllowSplitPayment(checked === true)}
-                disabled={loading}
-              />
-              <Label htmlFor="allowSplitPayment" className="text-sm font-normal cursor-pointer">
-                Allow split payments
-              </Label>
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2 pt-2">
+                <Checkbox
+                  id="allowSplitPayment"
+                  checked={allowSplitPayment}
+                  onCheckedChange={(checked) => setAllowSplitPayment(checked === true)}
+                  disabled={loading}
+                />
+                <Label htmlFor="allowSplitPayment" className="text-sm font-normal cursor-pointer">
+                  Allow split payments
+                </Label>
+              </div>
+              {allowSplitPayment && (
+                <div className="grid gap-2 pl-6">
+                  <Label htmlFor="splitPaymentFee" className="text-xs text-muted-foreground">
+                    Split Payment Fee ($)
+                  </Label>
+                  <Input
+                    id="splitPaymentFee"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="30.00"
+                    value={splitPaymentFee}
+                    onChange={(e) => setSplitPaymentFee(e.target.value)}
+                    disabled={loading}
+                    className="h-8"
+                  />
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

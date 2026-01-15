@@ -72,6 +72,22 @@ serve(async (req) => {
       )
     }
 
+    // Check if this is the current month and first_month_paid is true
+    const today = new Date();
+    const [month, year] = period_month.split('/');
+    const isCurrentMonth = parseInt(month) === today.getMonth() + 1 && parseInt(year) === today.getFullYear();
+    
+    if (isCurrentMonth && unit.first_month_paid) {
+      console.log(`Skipping statement generation for unit ${unit_id} - first month already paid for current month ${period_month}`);
+      return new Response(
+        JSON.stringify({ 
+          error: 'Cannot generate statement for current month when first month is already paid',
+          skipped: true 
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const baseRent = Number(unit.monthly_rent)
     let additionalFees = 0
     let lateFee = 0
@@ -96,19 +112,46 @@ serve(async (req) => {
     const dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day)
 
     if (today > dueDate) {
-      // One-time late fee
-      if (unit.late_fee_type === 'flat') {
-        lateFee = Number(unit.late_fee_amount)
-      } else if (unit.late_fee_type === 'percent') {
-        lateFee = (baseRent * Number(unit.late_fee_amount)) / 100
-      }
-      
-      // Daily late fee
       const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-      const dailyFee = daysLate * Number(unit.daily_late_fee || 0)
-      lateFee += dailyFee
-      
-      console.log(`Applied late fee: ${lateFee} (one-time + ${daysLate} days × $${unit.daily_late_fee})`);
+      const allowSplitPayment = Boolean(unit.allow_split_payment)
+
+      if (allowSplitPayment) {
+        // Split payment logic: No fees if <= 30 days, fees if > 30 days
+        if (daysLate > 30) {
+          // One-time late fee (flat or percent) - only if > 30 days
+          if (unit.late_fee_type === 'flat') {
+            lateFee = Number(unit.late_fee_amount)
+          } else if (unit.late_fee_type === 'percent') {
+            lateFee = (baseRent * Number(unit.late_fee_amount)) / 100
+          }
+          
+          // Daily late fee - only applies starting from day 31 (so daysLate - 30)
+          const daysForDailyFee = Math.max(0, daysLate - 30)
+          const dailyFee = daysForDailyFee * Number(unit.daily_late_fee || 0)
+          lateFee += dailyFee
+          
+          console.log(`Applied late fee (split payment): ${lateFee} (one-time + ${daysForDailyFee} days of daily fee × $${unit.daily_late_fee}, starting from day 31)`);
+        } else {
+          // No late fees if <= 30 days and split payment is allowed
+          console.log(`No late fees (split payment allowed, ${daysLate} days late, <= 30 days)`);
+        }
+      } else {
+        // Standard logic: charge fees immediately
+        // One-time late fee
+        if (unit.late_fee_type === 'flat') {
+          lateFee = Number(unit.late_fee_amount)
+        } else if (unit.late_fee_type === 'percent') {
+          lateFee = (baseRent * Number(unit.late_fee_amount)) / 100
+        }
+        
+        // Daily late fee (only applies starting from day 2)
+        // Daily fee only applies for days after the first day (so daysLate - 1)
+        const daysForDailyFee = Math.max(0, daysLate - 1)
+        const dailyFee = daysForDailyFee * Number(unit.daily_late_fee || 0)
+        lateFee += dailyFee
+        
+        console.log(`Applied late fee: ${lateFee} (one-time + ${daysForDailyFee} days of daily fee × $${unit.daily_late_fee})`);
+      }
     }
 
     const totalDue = baseRent + additionalFees + lateFee

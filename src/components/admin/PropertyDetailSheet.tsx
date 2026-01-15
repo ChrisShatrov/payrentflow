@@ -21,6 +21,7 @@ interface Unit {
   late_fee_amount: number;
   daily_late_fee: number;
   tenant_id: string | null;
+  first_month_paid?: boolean;
   tenantName?: string | null;
   tenantEmail?: string | null;
 }
@@ -55,7 +56,7 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
     try {
       const { data: unitsData, error: unitsError } = await supabase
         .from("units")
-        .select("id, unit_number, monthly_rent, due_day, allow_split_payment, late_fee_amount, daily_late_fee, tenant_id")
+        .select("id, unit_number, monthly_rent, due_day, allow_split_payment, split_payment_fee, late_fee_amount, daily_late_fee, tenant_id, first_month_paid")
         .eq("property_id", property.id)
         .order("unit_number");
 
@@ -87,6 +88,15 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
       }));
 
       setUnits(unitsWithTenants);
+      
+      // Update selectedUnit if it's currently open to reflect the latest data
+      if (selectedUnit) {
+        const updatedUnit = unitsWithTenants.find(u => u.id === selectedUnit.id);
+        if (updatedUnit) {
+          console.log("Updating selectedUnit with new data:", updatedUnit);
+          setSelectedUnit(updatedUnit);
+        }
+      }
     } catch (error) {
       console.error("Error fetching units:", error);
     } finally {
@@ -171,6 +181,11 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
+                        {unit.allow_split_payment && (
+                          <Badge variant="outline" className="text-xs">
+                            Split
+                          </Badge>
+                        )}
                         <Badge variant={unit.tenant_id ? "default" : "secondary"}>
                           {unit.tenant_id ? "Occupied" : "Vacant"}
                         </Badge>
@@ -186,10 +201,44 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
       </Sheet>
 
       <UnitDetailSheet
+        key={selectedUnit?.id || 'no-unit'} // Force re-render when unit changes
         unit={selectedUnit}
         open={unitSheetOpen}
         onOpenChange={setUnitSheetOpen}
-        onUnitUpdated={fetchUnits}
+        onUnitUpdated={async () => {
+          await fetchUnits();
+          // Re-select the unit after refresh to ensure it has latest data
+          if (selectedUnit) {
+            const refreshedUnits = await supabase
+              .from("units")
+              .select("id, unit_number, monthly_rent, due_day, allow_split_payment, split_payment_fee, late_fee_amount, daily_late_fee, tenant_id, first_month_paid")
+              .eq("id", selectedUnit.id)
+              .single();
+            
+            if (refreshedUnits.data) {
+              // Fetch tenant info if assigned
+              if (refreshedUnits.data.tenant_id) {
+                const { data: tenantData } = await supabase
+                  .from("profiles")
+                  .select("id, full_name, email")
+                  .eq("id", refreshedUnits.data.tenant_id)
+                  .single();
+                
+                setSelectedUnit({
+                  ...refreshedUnits.data,
+                  tenantName: tenantData?.full_name || null,
+                  tenantEmail: tenantData?.email || null,
+                });
+              } else {
+                setSelectedUnit({
+                  ...refreshedUnits.data,
+                  tenantName: null,
+                  tenantEmail: null,
+                });
+              }
+            }
+          }
+        }}
       />
     </>
   );

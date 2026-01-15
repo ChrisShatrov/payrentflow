@@ -17,6 +17,25 @@ interface DashboardStats {
   unpaidStatements: number;
 }
 
+interface PaymentData {
+  id: string;
+  amount: number;
+  status: string;
+  payment_method: string;
+  paid_at: string | null;
+  created_at: string;
+  unit: {
+    unit_number: string;
+    property: {
+      name: string;
+    };
+    tenant: {
+      full_name: string | null;
+      email: string;
+    } | null;
+  };
+}
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [stats, setStats] = useState<DashboardStats>({
@@ -30,6 +49,7 @@ export default function AdminDashboard() {
   const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
   const [stripeStatus, setStripeStatus] = useState<"loading" | "not_connected" | "pending" | "active">("loading");
   const [connectingStripe, setConnectingStripe] = useState(false);
+  const [recentPayments, setRecentPayments] = useState<PaymentData[]>([]);
 
   useEffect(() => {
     async function fetchData() {
@@ -70,6 +90,83 @@ export default function AdminDashboard() {
           tenants: tenantsCount,
           unpaidStatements: statementsRes.count || 0,
         });
+
+        // Fetch recent payments for all properties owned by this landlord
+        // First get all property IDs for this landlord
+        const { data: propertiesData } = await supabase
+          .from("properties")
+          .select("id")
+          .eq("landlord_id", user.id);
+
+        if (propertiesData && propertiesData.length > 0) {
+          const propertyIds = propertiesData.map((p) => p.id);
+
+          // Get all units for these properties
+          const { data: unitsData } = await supabase
+            .from("units")
+            .select("id")
+            .in("property_id", propertyIds);
+
+          if (unitsData && unitsData.length > 0) {
+            const unitIds = unitsData.map((u) => u.id);
+
+            // Get payments for these units
+            const { data: paymentsData } = await supabase
+              .from("payments")
+              .select(`
+                id,
+                amount,
+                status,
+                payment_method,
+                paid_at,
+                created_at,
+                unit_id,
+                units(
+                  unit_number,
+                  property_id,
+                  properties(
+                    id,
+                    name
+                  ),
+                  tenant_id,
+                  profiles:tenant_id(
+                    full_name,
+                    email
+                  )
+                )
+              `)
+              .in("unit_id", unitIds)
+              .order("created_at", { ascending: false })
+              .limit(3);
+
+            if (paymentsData) {
+              // Transform the data to match our interface
+              const transformedPayments = paymentsData
+                .filter((p: any) => p.units) // Filter out any payments without unit data
+                .map((p: any) => ({
+                  id: p.id,
+                  amount: p.amount,
+                  status: p.status,
+                  payment_method: p.payment_method,
+                  paid_at: p.paid_at,
+                  created_at: p.created_at,
+                  unit: {
+                    unit_number: p.units.unit_number,
+                    property: {
+                      name: p.units.properties?.name || "Unknown Property",
+                    },
+                    tenant: p.units.profiles
+                      ? {
+                          full_name: p.units.profiles.full_name,
+                          email: p.units.profiles.email,
+                        }
+                      : null,
+                  },
+                }));
+              setRecentPayments(transformedPayments);
+            }
+          }
+        }
       } catch (error) {
         console.error("Error fetching dashboard data:", error);
       } finally {
@@ -105,6 +202,14 @@ export default function AdminDashboard() {
   const handleConnectStripe = async () => {
     setConnectingStripe(true);
     try {
+      // Ensure we have a valid session before calling the function
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        throw new Error("Please sign in first.");
+      }
+
+      // The supabase client should automatically include the Authorization header
       const { data, error } = await supabase.functions.invoke("create-connect-account");
       
       if (error) throw error;
@@ -116,15 +221,40 @@ export default function AdminDashboard() {
       }
     } catch (error) {
       console.error("Error connecting Stripe:", error);
-      toast.error("Failed to start Stripe Connect setup");
+      toast.error(error instanceof Error ? error.message : "Failed to start Stripe Connect setup");
     } finally {
       setConnectingStripe(false);
     }
   };
 
+  const handleAccessStripeAccount = async () => {
+    try {
+      // Ensure we have a valid session before calling the function
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        throw new Error("Please sign in first.");
+      }
+
+      // Get Stripe login link (magic link)
+      const { data, error } = await supabase.functions.invoke("get-stripe-login-link");
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      
+      if (data?.url) {
+        window.open(data.url, "_blank");
+        toast.success("Opening your Stripe account dashboard");
+      }
+    } catch (error) {
+      console.error("Error accessing Stripe account:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to access Stripe account");
+    }
+  };
+
   const quickActions = [
     { title: "Add Property", icon: Building2, href: "/admin/properties" },
-    { title: "Add Tenant", icon: Users, href: "/admin/tenants" },
+    { title: "Add Unit", icon: Home, href: "/admin/properties" },
     { title: "View Statements", icon: FileText, href: "/admin/statements" },
     { title: "Settings", icon: Settings, href: "/admin" },
   ];
@@ -187,10 +317,16 @@ export default function AdminDashboard() {
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               )}
               {stripeStatus === "active" && (
-                <Badge className="bg-primary/10 text-primary border-0">
-                  <CheckCircle2 className="h-3 w-3 mr-1" />
-                  Connected
-                </Badge>
+                <>
+                  <Badge className="bg-primary/10 text-primary border-0">
+                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                    Connected
+                  </Badge>
+                  <Button onClick={handleAccessStripeAccount} variant="outline" size="sm">
+                    Access Account
+                    <ExternalLink className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
               )}
               {stripeStatus === "pending" && (
                 <>
@@ -242,19 +378,72 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Recent Activity Placeholder */}
+        {/* Recent Payments */}
         <div className="bg-card border border-border rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-foreground">Recent Activity</h3>
-            <Button variant="ghost" size="sm" className="text-primary">
-              View All
+            <h3 className="text-lg font-semibold text-foreground">Recent Payments</h3>
+            <Button variant="ghost" size="sm" className="text-primary" asChild>
+              <Link to="/admin/payments">
+                View All
+              </Link>
             </Button>
           </div>
-          <div className="text-center py-8 text-muted-foreground">
-            <DollarSign className="h-12 w-12 mx-auto mb-3 opacity-50" />
-            <p>No recent activity to display</p>
-            <p className="text-sm">Payments and updates will appear here</p>
-          </div>
+          {recentPayments.length > 0 ? (
+            <div className="space-y-3">
+              {recentPayments.map((payment) => (
+                <div
+                  key={payment.id}
+                  className="flex items-center justify-between p-4 bg-muted/50 rounded-lg border border-border"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-foreground">
+                        {payment.unit.property.name} - Unit {payment.unit.unit_number}
+                      </span>
+                      <Badge
+                        variant={
+                          payment.status === "completed" || payment.status === "paid"
+                            ? "default"
+                            : payment.status === "failed"
+                            ? "destructive"
+                            : "secondary"
+                        }
+                      >
+                        {payment.status === "completed" || payment.status === "paid"
+                          ? "Paid"
+                          : payment.status === "failed"
+                          ? "Failed"
+                          : "Pending"}
+                      </Badge>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {payment.unit.tenant
+                        ? `${payment.unit.tenant.full_name || payment.unit.tenant.email}`
+                        : "No tenant assigned"}
+                      {" • "}
+                      {payment.payment_method} • ${Number(payment.amount).toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm text-muted-foreground">
+                      {payment.paid_at
+                        ? new Date(payment.paid_at).toLocaleDateString()
+                        : new Date(payment.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              <DollarSign className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p>No recent payments to display</p>
+              <p className="text-sm">Payments will appear here</p>
+            </div>
+          )}
         </div>
       </div>
     </AdminLayout>

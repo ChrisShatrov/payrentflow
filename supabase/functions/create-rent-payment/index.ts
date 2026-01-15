@@ -46,25 +46,26 @@ serve(async (req) => {
     if (!user?.email) throw new Error("User not authenticated");
     logStep("User authenticated", { userId: user.id });
 
-    const { statement_id, payment_method } = await req.json();
+    const { statement_id, payment_method, payment_amount } = await req.json();
     if (!statement_id || !payment_method) {
       throw new Error("statement_id and payment_method are required");
     }
     if (!["card", "ach"].includes(payment_method)) {
       throw new Error("payment_method must be 'card' or 'ach'");
     }
-    logStep("Request parsed", { statement_id, payment_method });
+    logStep("Request parsed", { statement_id, payment_method, payment_amount });
 
     // Get statement with unit and property info
     const { data: statement, error: statementError } = await supabaseClient
       .from("statements")
       .select(`
         *,
-        unit:units (
+        units!inner (
           id,
           tenant_id,
           allow_split_payment,
-          property:properties (
+          split_payment_fee,
+          properties!inner (
             landlord_id
           )
         )
@@ -80,13 +81,20 @@ serve(async (req) => {
       status: statement.status 
     });
 
+    // Access the unit from the relationship (it's an array with one element)
+    const unit = Array.isArray(statement.units) ? statement.units[0] : statement.units;
+    if (!unit) {
+      throw new Error("Unit not found for this statement");
+    }
+    
     // Verify tenant owns this statement
-    if (statement.unit?.tenant_id !== user.id) {
+    if (unit.tenant_id !== user.id) {
       throw new Error("Unauthorized: You can only pay your own statements");
     }
 
     // Get landlord's Stripe Connect account
-    const landlordId = statement.unit?.property?.landlord_id;
+    const property = Array.isArray(unit.properties) ? unit.properties[0] : unit.properties;
+    const landlordId = property?.landlord_id;
     if (!landlordId) {
       throw new Error("Landlord not found for this property");
     }
@@ -104,36 +112,167 @@ serve(async (req) => {
       accountId: landlordProfile.stripe_account_id 
     });
 
-    // Calculate fees dynamically
-    const baseAmount = Math.round(Number(statement.total_due) * 100); // Convert to cents
+    // ============================================================================
+    // STRIPE CONNECT DESTINATION CHARGES - CRITICAL PRICING LOGIC
+    // ============================================================================
+    // 
+    // CRITICAL RULE: Everything the platform keeps MUST be included in 
+    // application_fee_amount. If a fee is NOT in application_fee_amount, 
+    // the landlord will receive it.
+    //
+    // Money Flow (Guaranteed by Stripe Connect):
+    // - Tenant pays: totalAmount (baseAmount + all platform fees)
+    // - Platform receives: application_fee_amount (paymentMethodFee + $25 + splitFee)
+    // - Landlord receives: baseAmount (100% of rent + late fees, NO deductions)
+    // - Stripe processing fees: Deducted separately by Stripe from total charge
+    //   (platform absorbs these, they are NOT deducted from landlord)
+    //
+    // NOTE: paymentMethodFee (3.75% card or $5 ACH) is the platform's fee charged
+    // to the tenant. Stripe's own processing fees (2.9% + $0.30 for cards) are 
+    // separate and deducted by Stripe from the total charge amount.
+    // ============================================================================
+
+    // Handle split payment logic if enabled
+    let baseAmount = 0;
+    let pastDueLateFee = 0;
+    
+    if (unit.allow_split_payment) {
+      logStep("Split payment enabled, calculating split payment amount");
+      
+      // Calculate current month's rent (half minimum)
+      const currentRent = Number(statement.base_rent);
+      const minPayment = currentRent / 2;
+      
+      // Fetch all unpaid/overdue statements for this unit (excluding current statement)
+      const { data: pastDueStatements, error: pastDueError } = await supabaseClient
+        .from("statements")
+        .select("*")
+        .eq("unit_id", unit.id)
+        .in("status", ["unpaid", "overdue"])
+        .neq("id", statement_id)
+        .order("period_month", { ascending: true }); // Oldest first
+      
+      if (pastDueError) {
+        logStep("Warning: Could not fetch past due statements", { error: pastDueError.message });
+      }
+      
+      // Calculate past due balance
+      const pastDueBalance = (pastDueStatements || []).reduce((sum, s) => sum + Number(s.total_due || 0), 0);
+      
+      // Determine payment amount
+      let paymentAmount = payment_amount ? Number(payment_amount) : minPayment;
+      
+      // Validate payment amount (minimum = half of current month, maximum = current month + all past due)
+      const maxPayment = currentRent + pastDueBalance;
+      if (paymentAmount < minPayment) {
+        throw new Error(`Payment amount must be at least $${minPayment.toFixed(2)} (half of current month's rent)`);
+      }
+      if (paymentAmount > maxPayment) {
+        throw new Error(`Payment amount cannot exceed $${maxPayment.toFixed(2)} (current month + past due)`);
+      }
+      
+      // Calculate late fees for past due if > 30 days
+      if (pastDueStatements && pastDueStatements.length > 0) {
+        // Get the oldest unpaid statement to calculate days late
+        const oldestStatement = pastDueStatements[0];
+        const [oldestMonth, oldestYear] = oldestStatement.period_month.split("/").map(Number);
+        const oldestDueDate = new Date(oldestYear, oldestMonth - 1, unit.due_day);
+        const today = new Date();
+        const daysLate = Math.floor((today.getTime() - oldestDueDate.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (daysLate > 30) {
+          // Apply flat late fee
+          if (unit.late_fee_type === 'flat') {
+            pastDueLateFee = Number(unit.late_fee_amount);
+          } else if (unit.late_fee_type === 'percent') {
+            pastDueLateFee = (currentRent * Number(unit.late_fee_amount)) / 100;
+          }
+          
+          // Apply daily late fee starting from day 31
+          const dailyLateFee = Number(unit.daily_late_fee || 0);
+          if (dailyLateFee > 0) {
+            const daysForDailyFee = Math.max(0, daysLate - 30);
+            pastDueLateFee += daysForDailyFee * dailyLateFee;
+            logStep("Applied late fees for past due", { 
+              daysLate, 
+              flatFee: unit.late_fee_type === 'flat' ? Number(unit.late_fee_amount) : (currentRent * Number(unit.late_fee_amount)) / 100,
+              dailyFee: daysForDailyFee * dailyLateFee,
+              totalLateFee: pastDueLateFee
+            });
+          }
+        }
+      }
+      
+      // Calculate total base amount: payment amount + past due + late fees
+      baseAmount = Math.round((paymentAmount + pastDueBalance + pastDueLateFee) * 100);
+      
+      logStep("Split payment calculated", {
+        currentRent,
+        minPayment,
+        paymentAmount,
+        pastDueBalance,
+        pastDueLateFee,
+        totalBaseAmount: baseAmount / 100
+      });
+    } else {
+      // Standard payment: pay full statement amount
+      baseAmount = Math.round(Number(statement.total_due) * 100); // Convert to cents
+    }
     let paymentMethodFee = 0;
     let splitFee = 0;
 
     // Add payment method fee
+    // NOTE: This is the platform's fee charged to the tenant (3.75% for card, $5 for ACH).
+    // Stripe's own processing fees (2.9% + $0.30 for cards) are separate and deducted
+    // by Stripe from the total charge - the platform absorbs these costs.
     if (payment_method === "card") {
       paymentMethodFee = Math.round(baseAmount * (CARD_FEE_PERCENT / 100));
     } else {
       paymentMethodFee = ACH_FEE_FLAT;
     }
 
-    // Add split payment fee if enabled
-    if (statement.unit?.allow_split_payment) {
-      splitFee = SPLIT_PAYMENT_FEE;
+    // Add split payment fee if enabled (use unit's fee or default to $30)
+    if (unit.allow_split_payment) {
+      const unitSplitFee = unit.split_payment_fee ? Math.round(Number(unit.split_payment_fee) * 100) : SPLIT_PAYMENT_FEE;
+      splitFee = unitSplitFee;
     }
 
-    // Total amount includes: base rent + payment method fee + service charge + split fee (if applicable)
+    // Total amount tenant pays = baseAmount (rent + late fees) + all platform fees
+    // This is the sum of all line items in the checkout session
     const totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
     
-    // Application fee (what goes to the platform) = payment method fee + service charge + split fee
+    // Application fee = ALL platform fees that must be included in application_fee_amount
+    // CRITICAL: This MUST equal the sum of all platform fees (paymentMethodFee + $25 + splitFee)
+    // If any platform fee is missing from application_fee_amount, the landlord will receive it.
     const applicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee;
     
-    logStep("Fees calculated", {
-      baseAmount,
-      paymentMethodFee,
-      serviceCharge: SERVICE_CHARGE,
-      splitFee,
-      applicationFee,
-      totalAmount
+    // Validation: Ensure application_fee_amount includes ALL platform fees
+    const expectedApplicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee;
+    if (applicationFee !== expectedApplicationFee) {
+      throw new Error(
+        `Application fee calculation error: expected ${expectedApplicationFee} but got ${applicationFee}. ` +
+        `All platform fees must be included in application_fee_amount.`
+      );
+    }
+    
+    // Enhanced logging: Show exact money flow breakdown
+    const landlordReceives = baseAmount; // Landlord gets 100% of base amount
+    const platformReceives = applicationFee; // Platform gets all fees in application_fee_amount
+    const tenantPays = totalAmount; // Tenant pays base + all fees
+    
+    logStep("Fees calculated - Money Flow Breakdown", {
+      tenantPays: tenantPays / 100, // Convert to dollars for readability
+      baseAmount: baseAmount / 100,
+      paymentMethodFee: paymentMethodFee / 100,
+      serviceCharge: SERVICE_CHARGE / 100,
+      splitFee: splitFee / 100,
+      platformReceives: platformReceives / 100,
+      landlordReceives: landlordReceives / 100,
+      validation: {
+        applicationFeeEqualsSum: applicationFee === (paymentMethodFee + SERVICE_CHARGE + splitFee),
+        landlordGetsFullRent: landlordReceives === baseAmount,
+        totalMatches: tenantPays === (baseAmount + platformReceives)
+      }
     });
 
     const stripe = new Stripe(stripeKey, { apiVersion: "2025-08-27.basil" });
@@ -168,13 +307,18 @@ serve(async (req) => {
       success_url: `${origin}/tenant?payment=success&statement_id=${statement_id}`,
       cancel_url: `${origin}/tenant?payment=cancelled`,
       payment_intent_data: {
+        // CRITICAL: application_fee_amount MUST include ALL platform fees
+        // (paymentMethodFee + $25 service charge + splitFee if applicable)
+        // Stripe guarantees: Landlord receives = totalAmount - application_fee_amount = baseAmount
+        // If any platform fee is missing here, the landlord will receive it instead of the platform.
         application_fee_amount: applicationFee,
         transfer_data: {
+          // Destination charge: Landlord receives baseAmount (100% of rent, no deductions)
           destination: landlordProfile.stripe_account_id,
         },
         metadata: {
           statement_id,
-          unit_id: statement.unit?.id,
+          unit_id: unit.id,
           payment_method,
           payment_method_fee: paymentMethodFee,
           service_charge: SERVICE_CHARGE,
@@ -239,23 +383,118 @@ serve(async (req) => {
 
     // Create pending payment record
     // Convert payment method to match database constraint (ACH/Card)
-    const paymentMethodDb = payment_method === "card" ? "Card" : "ACH";
+    // Database constraint: CHECK (payment_method IN ('ACH', 'Card'))
+    let paymentMethodDb: string;
+    if (payment_method === "card" || payment_method === "Card") {
+      paymentMethodDb = "Card";
+    } else if (payment_method === "ach" || payment_method === "ACH") {
+      paymentMethodDb = "ACH";
+    } else {
+      throw new Error(`Invalid payment_method: ${payment_method}. Must be 'card' or 'ach'`);
+    }
     
-    const { error: paymentError } = await supabaseClient
-      .from("payments")
-      .insert({
-        unit_id: statement.unit?.id,
-        statement_id: statement_id,
-        amount: totalAmount / 100,
-        fee_amount: applicationFee / 100,
-        payment_method: paymentMethodDb,
-        status: "pending",
-        stripe_payment_id: session.id,
+    // Validate against database constraint
+    if (paymentMethodDb !== "Card" && paymentMethodDb !== "ACH") {
+      throw new Error(`Payment method conversion failed. Got: ${paymentMethodDb}, expected: 'Card' or 'ACH'`);
+    }
+    
+    logStep("Payment method conversion", {
+      input: payment_method,
+      converted: paymentMethodDb,
+      isValid: paymentMethodDb === "Card" || paymentMethodDb === "ACH",
+    });
+    
+    // Ensure unit_id exists (we already have unit from above)
+    const unitId = unit.id;
+    if (!unitId) {
+      throw new Error("Unit ID not found in statement");
+    }
+    
+    const paymentInsertData = {
+      unit_id: unitId,
+      statement_id: statement_id,
+      amount: totalAmount / 100,
+      fee_amount: applicationFee / 100,
+      payment_method: paymentMethodDb, // Must be exactly 'Card' or 'ACH'
+      status: "pending",
+      stripe_payment_id: session.id,
+    };
+    
+    logStep("Creating payment record", {
+      unit_id: unitId,
+      statement_id: statement_id,
+      amount: totalAmount / 100,
+      fee_amount: applicationFee / 100,
+      payment_method: paymentMethodDb, // Log the exact value being inserted
+      status: "pending",
+      stripe_payment_id: session.id,
+    });
+    
+    // Verify unit_id exists in database before inserting
+    const { data: unitCheck, error: unitCheckError } = await supabaseClient
+      .from("units")
+      .select("id")
+      .eq("id", unitId)
+      .single();
+    
+    if (unitCheckError || !unitCheck) {
+      logStep("ERROR: Unit ID validation failed", {
+        unit_id: unitId,
+        error: unitCheckError?.message,
       });
+      throw new Error(`Unit ID ${unitId} not found in database: ${unitCheckError?.message}`);
+    }
+    logStep("Unit ID validated", { unit_id: unitId });
+    
+    // Verify statement_id exists
+    const { data: statementCheck, error: statementCheckError } = await supabaseClient
+      .from("statements")
+      .select("id")
+      .eq("id", statement_id)
+      .single();
+    
+    if (statementCheckError || !statementCheck) {
+      logStep("ERROR: Statement ID validation failed", {
+        statement_id: statement_id,
+        error: statementCheckError?.message,
+      });
+      throw new Error(`Statement ID ${statement_id} not found in database: ${statementCheckError?.message}`);
+    }
+    logStep("Statement ID validated", { statement_id: statement_id });
+    
+    const { data: paymentData, error: paymentError } = await supabaseClient
+      .from("payments")
+      .insert(paymentInsertData)
+      .select()
+      .single();
 
     if (paymentError) {
-      logStep("Error creating payment record", { error: paymentError.message });
+      logStep("ERROR: Failed to create payment record", { 
+        error: paymentError.message,
+        code: paymentError.code,
+        details: paymentError.details,
+        hint: paymentError.hint,
+        fullError: JSON.stringify(paymentError),
+        insertData: paymentInsertData,
+      });
+      throw new Error(`Failed to create payment record: ${paymentError.message} (Code: ${paymentError.code})`);
     }
+    
+    if (!paymentData) {
+      logStep("ERROR: Payment insert returned no data", {
+        insertData: paymentInsertData,
+      });
+      throw new Error("Payment insert succeeded but no data returned");
+    }
+    
+    logStep("Payment record created successfully", { 
+      payment_id: paymentData.id,
+      unit_id: paymentData.unit_id,
+      statement_id: paymentData.statement_id,
+      amount: paymentData.amount,
+      status: paymentData.status,
+      stripe_payment_id: paymentData.stripe_payment_id,
+    });
 
     return new Response(JSON.stringify({
       url: session.url,

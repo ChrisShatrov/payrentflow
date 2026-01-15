@@ -1,5 +1,5 @@
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Building2, Users, FileText, LogOut, Settings } from "lucide-react";
+import { LayoutDashboard, Building2, Users, FileText, LogOut, Settings, CreditCard } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 
@@ -7,6 +7,7 @@ const navItems = [
   { title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { title: "Properties", url: "/admin/properties", icon: Building2 },
   { title: "Tenants", url: "/admin/tenants", icon: Users },
+  { title: "Payments", url: "/admin/payments", icon: CreditCard },
   { title: "Statements", url: "/admin/statements", icon: FileText },
   { title: "Settings", url: "/admin/settings", icon: Settings },
 ] as const;
@@ -16,8 +17,12 @@ export function AdminSidebar() {
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
+    // Mark that we're signing out to prevent redirect loops
+    // Use localStorage so it persists across page reload
+    localStorage.setItem('just_signed_out', 'true');
     await signOut();
-    navigate("/auth?mode=signin");
+    // Use window.location.href to force a full page reload and clear all state
+    window.location.href = "/auth";
   };
 
   return (

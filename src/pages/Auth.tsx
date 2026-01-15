@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,10 +30,11 @@ const signInSchema = z.object({
 });
 
 export default function Auth() {
-  const [searchParams] = useSearchParams();
-  const mode = searchParams.get("mode");
-  const stripeOnboarding = searchParams.get("stripe_onboarding");
-  const [isSignUp, setIsSignUp] = useState(mode !== "signin");
+  const location = useLocation();
+  const stripeOnboarding = new URLSearchParams(location.search).get("stripe_onboarding");
+  // Determine if signup based on route path
+  const isSignUpRoute = location.pathname === "/signup";
+  const [isSignUp, setIsSignUp] = useState(isSignUpRoute);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showStripeStep, setShowStripeStep] = useState(false);
@@ -47,27 +48,99 @@ export default function Auth() {
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const { signUp, signIn, user, role } = useAuth();
+  const { signUp, signIn, user, role, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
   useEffect(() => {
-    setIsSignUp(mode !== "signin");
-  }, [mode]);
+    setIsSignUp(isSignUpRoute);
+  }, [isSignUpRoute]);
 
   // Check if user needs Stripe onboarding after signup
   useEffect(() => {
-    if (user && role === "admin" && stripeOnboarding === "true") {
-      setShowStripeStep(true);
-    } else if (user && !showStripeStep) {
-      // Redirect based on role
-      if (role === "admin") {
-        navigate("/admin");
-      } else if (role === "tenant") {
-        navigate("/tenant");
+    // Wait for auth to finish loading before redirecting
+    if (authLoading) return;
+    
+    // Only redirect if we're on the auth page (not already redirected)
+    if (location.pathname !== "/auth" && location.pathname !== "/signup") {
+      return;
+    }
+    
+    // Don't redirect if we just signed out
+    const justSignedOut = localStorage.getItem('just_signed_out');
+    if (justSignedOut) {
+      localStorage.removeItem('just_signed_out');
+      // Don't redirect - let user stay on auth page
+      return;
+    }
+    
+    // Check if this is a password recovery session - if so, redirect to reset-password page
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const searchParams = new URLSearchParams(window.location.search);
+    const isRecovery = hashParams.get("type") === "recovery" || searchParams.get("type") === "recovery";
+    
+    if (isRecovery) {
+      console.log("[Auth] Recovery session detected, redirecting to /reset-password");
+      navigate("/reset-password", { replace: true });
+      return;
+    }
+    
+    // If user is logged in, redirect them (even if role is null, we'll handle it in ProtectedRoute)
+    if (user) {
+      if (role) {
+        console.log("[Auth] User and role available, redirecting:", { userId: user.id, role });
+        if (role === "admin" && stripeOnboarding === "true") {
+          setShowStripeStep(true);
+        } else if (!showStripeStep) {
+          // Redirect based on role
+          if (role === "admin") {
+            console.log("[Auth] Redirecting to /admin");
+            navigate("/admin", { replace: true });
+          } else if (role === "tenant") {
+            console.log("[Auth] Redirecting to /tenant");
+            navigate("/tenant", { replace: true });
+          }
+        }
+      } else {
+        // User logged in but no role - try to determine role from unit/property assignment
+        console.log("[Auth] User logged in but no role, checking unit/property assignment");
+        const checkAndRedirect = async () => {
+          // Check if assigned to a unit (tenant)
+          const { data: unitData } = await supabase
+            .from('units')
+            .select('id')
+            .eq('tenant_id', user.id)
+            .maybeSingle();
+          
+          if (unitData) {
+            console.log("[Auth] User is assigned to a unit, redirecting to tenant dashboard");
+            navigate("/tenant", { replace: true });
+            return;
+          }
+          
+          // Check if owns properties (admin)
+          const { data: propertyData } = await supabase
+            .from('properties')
+            .select('id')
+            .eq('landlord_id', user.id)
+            .maybeSingle();
+          
+          if (propertyData) {
+            console.log("[Auth] User owns properties, redirecting to admin dashboard");
+            navigate("/admin", { replace: true });
+            return;
+          }
+          
+          // Default to tenant if we can't determine
+          console.log("[Auth] Cannot determine role, defaulting to tenant dashboard");
+          navigate("/tenant", { replace: true });
+        };
+        checkAndRedirect();
       }
     }
-  }, [user, role, navigate, stripeOnboarding, showStripeStep]);
+    // Don't try to fetch role here - let useAuth handle it
+    // The ProtectedRoute will handle waiting for the role
+  }, [user, role, navigate, stripeOnboarding, showStripeStep, authLoading, location.pathname]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -94,7 +167,12 @@ export default function Auth() {
           return;
         }
 
-        const { error } = await signUp(
+        // Note: We don't check if user exists here because:
+        // 1. Invited users might have a profile but no auth account yet (they need to sign up)
+        // 2. Supabase will return an error if auth account already exists
+        // We'll handle the error from Supabase instead
+
+        const signUpResult = await signUp(
           formData.email,
           formData.password,
           formData.fullName,
@@ -102,31 +180,47 @@ export default function Auth() {
           formData.role
         );
 
-        if (error) {
-          if (error.message.includes("already registered")) {
+        if (signUpResult.error) {
+          // Check for various "user already exists" error messages
+          const errorMsg = signUpResult.error.message.toLowerCase();
+          if (errorMsg.includes("already registered") || 
+              errorMsg.includes("user already registered") ||
+              errorMsg.includes("already exists") ||
+              errorMsg.includes("email address is already")) {
             toast({
-              title: "Account exists",
+              title: "Account already exists",
               description: "This email is already registered. Please sign in instead.",
               variant: "destructive",
             });
+            // Switch to login form after a moment
+            setTimeout(() => {
+              navigate("/auth", { replace: true });
+            }, 2000);
           } else {
             toast({
               title: "Sign up failed",
-              description: error.message,
+              description: signUpResult.error.message,
               variant: "destructive",
             });
           }
-        } else {
+        } else if (signUpResult.data?.user) {
           // If landlord, show Stripe onboarding step
           if (formData.role === "admin") {
             toast({
               title: "Account created!",
               description: "Now let's set up your payment account.",
             });
-            // Wait for auth state to update, then show Stripe step
-            setTimeout(() => {
-              setShowStripeStep(true);
-            }, 1500);
+            // Wait for auth state to update and user to be available, then show Stripe step
+            const checkUserAndShowStripe = () => {
+              if (user && role === "admin") {
+                setShowStripeStep(true);
+              } else {
+                // Check again after a short delay
+                setTimeout(checkUserAndShowStripe, 500);
+              }
+            };
+            // Start checking after a brief delay
+            setTimeout(checkUserAndShowStripe, 1000);
           } else {
             toast({
               title: "Account created!",
@@ -164,6 +258,13 @@ export default function Auth() {
               variant: "destructive",
             });
           }
+        } else {
+          // Login successful - the useEffect will handle redirect once role is loaded
+          toast({
+            title: "Login successful",
+            description: "Redirecting to your dashboard...",
+          });
+          // Don't manually redirect here - let the useEffect and ProtectedRoute handle it
         }
       }
     } catch {
@@ -180,10 +281,39 @@ export default function Auth() {
   const handleStripeConnect = async () => {
     setStripeLoading(true);
     try {
+      // Ensure user is available
+      if (!user) {
+        throw new Error("Please sign in first. If you just signed up, please wait a moment and try again.");
+      }
+
+      // Ensure we have a valid session before calling the function
+      let { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        // Wait a moment and try again (session might still be establishing after signup)
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const retryResult = await supabase.auth.getSession();
+        session = retryResult.data.session;
+        sessionError = retryResult.error;
+        
+        if (sessionError || !session) {
+          throw new Error("Please sign in first. If you just signed up, please wait a moment and try again.");
+        }
+      }
+
+      console.log("[Auth] Calling create-connect-account with user:", user.id, "session:", !!session);
+
+      // The supabase client should automatically include the Authorization header
       const { data, error } = await supabase.functions.invoke("create-connect-account");
       
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      if (error) {
+        console.error("[Auth] Function invocation error:", error);
+        throw error;
+      }
+      if (data?.error) {
+        console.error("[Auth] Function returned error:", data.error);
+        throw new Error(data.error);
+      }
 
       if (data?.url) {
         window.location.href = data.url;
@@ -404,16 +534,13 @@ export default function Auth() {
 
           <p className="text-center text-muted-foreground mt-6">
             {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setErrors({});
-              }}
+            <Link
+              to={isSignUp ? "/auth" : "/signup"}
+              onClick={() => setErrors({})}
               className="text-primary font-medium hover:underline"
             >
               {isSignUp ? "Login" : "Sign Up"}
-            </button>
+            </Link>
           </p>
         </div>
       </div>

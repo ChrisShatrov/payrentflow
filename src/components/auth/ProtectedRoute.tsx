@@ -26,13 +26,18 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
   }
 
   // If specific roles are required, check them
-  if (allowedRoles && role && !allowedRoles.includes(role)) {
-    // Redirect to appropriate dashboard based on role
-    if (role === "admin") {
-      return <Navigate to="/admin" replace />;
-    } else if (role === "tenant") {
-      return <Navigate to="/tenant" replace />;
+  // But allow access even if role is null (user might not have role set yet)
+  if (allowedRoles) {
+    // If we have a role and it's not allowed, redirect
+    if (role && !allowedRoles.includes(role)) {
+      // Redirect to appropriate dashboard based on role
+      if (role === "admin") {
+        return <Navigate to="/admin" replace />;
+      } else if (role === "tenant") {
+        return <Navigate to="/tenant" replace />;
+      }
     }
+    // If role is null, still allow access - let the component handle missing role gracefully
   }
 
   return <>{children}</>;

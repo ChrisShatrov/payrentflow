@@ -31,11 +31,26 @@ serve(async (req) => {
     );
 
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) throw new Error("No authorization header provided");
+    logStep("Authorization header check", { hasHeader: !!authHeader, headerLength: authHeader?.length || 0 });
+    
+    if (!authHeader) {
+      logStep("ERROR: No authorization header provided");
+      throw new Error("No authorization header provided");
+    }
 
     const token = authHeader.replace("Bearer ", "");
+    logStep("Token extracted", { tokenLength: token.length, tokenPrefix: token.substring(0, 20) + "..." });
+    
+    if (!token || token.length === 0) {
+      logStep("ERROR: Empty token after Bearer removal");
+      throw new Error("Invalid authorization token");
+    }
+
     const { data: userData, error: userError } = await supabaseClient.auth.getUser(token);
-    if (userError) throw new Error(`Authentication error: ${userError.message}`);
+    if (userError) {
+      logStep("ERROR: getUser failed", { error: userError.message });
+      throw new Error(`Authentication error: ${userError.message}`);
+    }
     
     const user = userData.user;
     if (!user?.email) throw new Error("User not authenticated or email not available");

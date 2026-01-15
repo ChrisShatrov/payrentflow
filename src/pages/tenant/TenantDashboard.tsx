@@ -1,14 +1,14 @@
-import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState, useEffect, useCallback } from "react";
+import { useSearchParams, Link } from "react-router-dom";
 import { TenantLayout } from "@/components/tenant/TenantLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { 
   DollarSign, 
   TrendingUp, 
   Calendar, 
   Home,
-  CreditCard,
   FileText,
   Wrench,
   MessageSquare,
@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { format, differenceInDays, parseISO } from "date-fns";
+import { format, differenceInDays, parseISO, startOfDay } from "date-fns";
 import { PaymentModal } from "@/components/tenant/PaymentModal";
 import { DocumentsModal } from "@/components/tenant/DocumentsModal";
 import { MaintenanceModal } from "@/components/tenant/MaintenanceModal";
@@ -37,6 +37,10 @@ interface UnitData {
   due_day: number;
   allow_split_payment: boolean;
   lease_pdf_url: string | null;
+  daily_late_fee: number;
+  late_fee_type?: string;
+  late_fee_amount?: number;
+  first_month_paid?: boolean;
   property: {
     name: string;
     address: string;
@@ -78,48 +82,77 @@ export default function TenantDashboard() {
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [tenantProfile, setTenantProfile] = useState<{ full_name: string; email: string } | null>(null);
 
-  useEffect(() => {
-    if (user) {
-      fetchTenantData();
-    }
-  }, [user]);
-
-  // Handle payment redirects from Stripe
-  useEffect(() => {
-    const paymentStatus = searchParams.get("payment");
-    if (paymentStatus === "success") {
-      toast.success("Payment successful! Your payment is being processed.");
-      // Refresh data to show updated payment status
-      if (user) {
-        fetchTenantData();
-      }
-      // Clear the query parameter
-      searchParams.delete("payment");
-      searchParams.delete("statement_id");
-      setSearchParams(searchParams, { replace: true });
-    } else if (paymentStatus === "cancelled") {
-      toast.error("Payment was cancelled. You can try again anytime.");
-      // Clear the query parameter
-      searchParams.delete("payment");
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [searchParams, user]);
-
-  const fetchTenantData = async () => {
+  const fetchTenantData = useCallback(async () => {
     try {
+      if (!user?.id) {
+        console.error("[TenantDashboard] No user ID available");
+        return;
+      }
+
+      console.log("[TenantDashboard] Fetching data for user:", user.id);
+
       // Fetch tenant profile
-      const { data: profileData } = await supabase
+      let { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("full_name, email")
-        .eq("id", user?.id)
+        .select("full_name, email, id")
+        .eq("id", user.id)
         .single();
       
-      if (profileData) {
+      console.log("[TenantDashboard] Profile data:", { profileData, profileError });
+      
+      // If no profile exists, try to create one from auth user data
+      if (!profileData && user.email) {
+        console.log("[TenantDashboard] No profile found, attempting to create one from auth user data");
+        const { data: authUser } = await supabase.auth.getUser();
+        
+        if (authUser?.user) {
+          // Try to insert, but handle conflict if profile already exists
+          const { data: newProfile, error: createError } = await supabase
+            .from("profiles")
+            .upsert({
+              id: user.id,
+              email: user.email || authUser.user.email || "",
+              full_name: authUser.user.user_metadata?.full_name || null,
+              phone: authUser.user.user_metadata?.phone || null,
+              role: authUser.user.user_metadata?.role || "tenant",
+            }, {
+              onConflict: 'id'
+            })
+            .select()
+            .single();
+          
+          if (newProfile && !createError) {
+            console.log("[TenantDashboard] Profile created/updated successfully:", newProfile);
+            profileData = newProfile;
+            setTenantProfile(newProfile);
+          } else {
+            console.error("[TenantDashboard] Failed to create profile:", createError);
+            // Try to fetch again in case it was created by another process
+            const { data: retryProfile } = await supabase
+              .from("profiles")
+              .select("full_name, email, id")
+              .eq("id", user.id)
+              .single();
+            
+            if (retryProfile) {
+              console.log("[TenantDashboard] Profile found on retry:", retryProfile);
+              profileData = retryProfile;
+              setTenantProfile(retryProfile);
+            } else {
+              toast.error("Profile creation failed. Please contact support.");
+            }
+          }
+        }
+      } else if (profileData) {
         setTenantProfile(profileData);
+      } else if (!user.email) {
+        console.error("[TenantDashboard] No email available for user:", user.id);
+        toast.error("User email not found. Please contact support.");
       }
 
       // Fetch tenant's unit with property info
-      const { data: unitData } = await supabase
+      console.log("[TenantDashboard] Querying units with tenant_id:", user.id);
+      const { data: unitData, error: unitError } = await supabase
         .from("units")
         .select(`
           id,
@@ -127,52 +160,219 @@ export default function TenantDashboard() {
           monthly_rent,
           due_day,
           allow_split_payment,
+          split_payment_fee,
           lease_pdf_url,
+          daily_late_fee,
+          late_fee_type,
+          late_fee_amount,
+          first_month_paid,
+          tenant_id,
           property:properties (
             name,
             address
           )
         `)
-        .eq("tenant_id", user?.id)
+        .eq("tenant_id", user.id)
         .maybeSingle();
 
+      console.log("[TenantDashboard] Unit query result:", { unitData, unitError });
+
+      // If no unit found, try to find by email as fallback
+      if (!unitData && profileData?.email) {
+        console.log("[TenantDashboard] No unit found by tenant_id, trying email lookup:", profileData.email);
+        // Try to find unit by matching tenant email in profiles
+        const { data: unitsByEmail } = await supabase
+          .from("units")
+          .select(`
+            id,
+            unit_number,
+            monthly_rent,
+            due_day,
+            allow_split_payment,
+            split_payment_fee,
+            lease_pdf_url,
+            daily_late_fee,
+            late_fee_type,
+            late_fee_amount,
+            first_month_paid,
+            tenant_id,
+            profiles:tenant_id(id, email),
+            property:properties (
+              name,
+              address
+            )
+          `)
+          .not("tenant_id", "is", null);
+
+        console.log("[TenantDashboard] All units with tenants:", unitsByEmail);
+        
+        // Find unit where tenant email matches
+        const matchingUnit = unitsByEmail?.find((u: any) => u.profiles?.email === profileData.email);
+        if (matchingUnit) {
+          console.log("[TenantDashboard] Found unit by email match:", matchingUnit);
+          // If found by email but tenant_id doesn't match, there's a data mismatch
+          if (matchingUnit.tenant_id !== user.id) {
+            console.warn("[TenantDashboard] WARNING: Unit tenant_id doesn't match user ID!", {
+              unitTenantId: matchingUnit.tenant_id,
+              userId: user.id,
+              tenantEmail: profileData.email
+            });
+            toast.error("Unit assignment mismatch detected. Please contact support.");
+          }
+        }
+      }
+
       if (unitData) {
+        console.log("[TenantDashboard] Unit found successfully:", unitData);
         setUnit(unitData as unknown as UnitData);
 
-        // Fetch current month's statement (format: MM/yyyy)
+        // Skip current month's statement if first_month_paid is true
         const currentMonth = format(new Date(), "MM/yyyy");
-        const { data: statementData } = await supabase
-          .from("statements")
-          .select("*")
-          .eq("unit_id", unitData.id)
-          .eq("period_month", currentMonth)
-          .maybeSingle();
+        const shouldSkipCurrentMonth = unitData.first_month_paid === true;
 
-        if (statementData) {
-          setCurrentStatement(statementData);
-        } else {
-          // If no statement for current month, check for any unpaid/overdue statement
-          const { data: overdueStatement } = await supabase
+        if (!shouldSkipCurrentMonth) {
+          // Fetch current month's statement (format: MM/yyyy)
+          const { data: statementData } = await supabase
             .from("statements")
             .select("*")
             .eq("unit_id", unitData.id)
-            .in("status", ["unpaid", "overdue"])
-            .order("created_at", { ascending: false })
-            .limit(1)
+            .eq("period_month", currentMonth)
+            .maybeSingle();
+
+          if (statementData) {
+            setCurrentStatement(statementData);
+          } else {
+            // If no statement for current month, try to generate one
+            try {
+              const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
+                body: { unit_id: unitData.id, period_month: currentMonth }
+              });
+
+              if (!generateError && generatedStatement) {
+                // Fetch the newly created statement
+                const { data: newStatement } = await supabase
+                  .from("statements")
+                  .select("*")
+                  .eq("unit_id", unitData.id)
+                  .eq("period_month", currentMonth)
+                  .maybeSingle();
+                
+                if (newStatement) {
+                  setCurrentStatement(newStatement);
+                } else {
+                  // If generation failed or was skipped, check for any unpaid/overdue statement
+                  const { data: overdueStatement } = await supabase
+                    .from("statements")
+                    .select("*")
+                    .eq("unit_id", unitData.id)
+                    .in("status", ["unpaid", "overdue"])
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+                  
+                  if (overdueStatement) {
+                    setCurrentStatement(overdueStatement);
+                  }
+                }
+              } else {
+                // Generation failed (might be first_month_paid), check for any unpaid/overdue statement
+                const { data: overdueStatement } = await supabase
+                  .from("statements")
+                  .select("*")
+                  .eq("unit_id", unitData.id)
+                  .in("status", ["unpaid", "overdue"])
+                  .order("created_at", { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+                
+                if (overdueStatement) {
+                  setCurrentStatement(overdueStatement);
+                }
+              }
+            } catch (error) {
+              console.error("Error generating statement:", error);
+              // Fallback: check for any unpaid/overdue statement
+              const { data: overdueStatement } = await supabase
+                .from("statements")
+                .select("*")
+                .eq("unit_id", unitData.id)
+                .in("status", ["unpaid", "overdue"])
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              
+              if (overdueStatement) {
+                setCurrentStatement(overdueStatement);
+              }
+            }
+          }
+        } else {
+          // First month paid - skip current month entirely
+          console.log("[TenantDashboard] First month paid, skipping current month. Looking for next month's statement.");
+          
+          // Calculate next month
+          const today = new Date();
+          const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+          const nextMonthStr = format(nextMonth, "MM/yyyy");
+          
+          // IMPORTANT: When first_month_paid is true, we should NOT show the current month's statement
+          // even if it exists and is unpaid/overdue. The tenant is not responsible for it.
+          
+          // Look for next month's statement (or any future month)
+          const { data: nextMonthStatement } = await supabase
+            .from("statements")
+            .select("*")
+            .eq("unit_id", unitData.id)
+            .eq("period_month", nextMonthStr)
             .maybeSingle();
           
-          if (overdueStatement) {
-            setCurrentStatement(overdueStatement);
+          if (nextMonthStatement) {
+            console.log("[TenantDashboard] Found next month's statement:", nextMonthStr);
+            setCurrentStatement(nextMonthStatement);
+          } else {
+            // Try to generate next month's statement
+            try {
+              console.log("[TenantDashboard] Generating next month's statement:", nextMonthStr);
+              const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
+                body: { unit_id: unitData.id, period_month: nextMonthStr }
+              });
+
+              if (!generateError && generatedStatement) {
+                // Fetch the newly created statement
+                const { data: newStatement } = await supabase
+                  .from("statements")
+                  .select("*")
+                  .eq("unit_id", unitData.id)
+                  .eq("period_month", nextMonthStr)
+                  .maybeSingle();
+                
+                if (newStatement) {
+                  setCurrentStatement(newStatement);
+                } else {
+                  console.log("[TenantDashboard] Next month statement generated but could not fetch");
+                  setCurrentStatement(null);
+                }
+              } else {
+                console.log("[TenantDashboard] Could not generate next month's statement, will show nothing");
+                setCurrentStatement(null);
+              }
+            } catch (error) {
+              console.error("Error generating next month statement:", error);
+              setCurrentStatement(null);
+            }
           }
+          
+          // Explicitly do NOT show current month's statement, even if it exists
+          // The tenant is not responsible for it when first_month_paid is true
         }
 
-        // Fetch recent payments
+        // Fetch recent payments (limit to 2-3 for dashboard)
         const { data: paymentsData } = await supabase
           .from("payments")
           .select("*")
           .eq("unit_id", unitData.id)
           .order("created_at", { ascending: false })
-          .limit(5);
+          .limit(3);
 
         if (paymentsData) {
           setRecentPayments(paymentsData);
@@ -190,13 +390,99 @@ export default function TenantDashboard() {
             setTotalPaid(yearPayments.reduce((sum, p) => sum + Number(p.amount), 0));
           }
         }
+      } else {
+        console.warn("[TenantDashboard] No unit found for tenant_id:", user.id);
+        // Show helpful error message
+        if (profileData) {
+          console.log("[TenantDashboard] Tenant profile exists but no unit assigned. Profile:", profileData);
+          toast.error("No unit assigned. Please contact your landlord to assign you to a unit.");
+        }
       }
     } catch (error) {
-      console.error("Error fetching tenant data:", error);
+      console.error("[TenantDashboard] Error fetching tenant data:", error);
+      toast.error("Failed to load tenant data. Please refresh the page.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      fetchTenantData();
+    }
+  }, [user, fetchTenantData]);
+
+  // Handle payment redirects from Stripe
+  useEffect(() => {
+    const paymentStatus = searchParams.get("payment");
+    const statementId = searchParams.get("statement_id");
+    
+    if (paymentStatus === "success") {
+      toast.success("Payment successful! Your payment is being processed.");
+      
+      // Refresh data immediately
+      if (user) {
+        fetchTenantData();
+      }
+      
+      // Poll for payment status updates (webhook may take a few seconds)
+      if (statementId && user) {
+        let pollCount = 0;
+        const maxPolls = 10; // Poll for up to 10 seconds (10 * 1 second intervals)
+        
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          
+          try {
+            // Check if statement status has been updated to "paid"
+            const { data: statement } = await supabase
+              .from("statements")
+              .select("status")
+              .eq("id", statementId)
+              .single();
+            
+            // Check if payment has been marked as completed
+            const { data: payments } = await supabase
+              .from("payments")
+              .select("status, statement_id")
+              .eq("statement_id", statementId)
+              .eq("status", "completed")
+              .limit(1);
+            
+            // If statement is paid or payment is completed, refresh and stop polling
+            if (statement?.status === "paid" || (payments && payments.length > 0)) {
+              clearInterval(pollInterval);
+              fetchTenantData();
+              toast.success("Payment confirmed! Your statement has been updated.");
+            } else if (pollCount >= maxPolls) {
+              // Stop polling after max attempts
+              clearInterval(pollInterval);
+              // Still refresh in case webhook is just slow
+              fetchTenantData();
+            }
+          } catch (error) {
+            console.error("Error polling payment status:", error);
+            if (pollCount >= maxPolls) {
+              clearInterval(pollInterval);
+            }
+          }
+        }, 1000); // Poll every second
+        
+        // Cleanup interval on unmount
+        return () => clearInterval(pollInterval);
+      }
+      
+      // Clear the query parameter
+      searchParams.delete("payment");
+      searchParams.delete("statement_id");
+      setSearchParams(searchParams, { replace: true });
+    } else if (paymentStatus === "cancelled") {
+      toast.error("Payment was cancelled. You can try again anytime.");
+      // Clear the query parameter
+      searchParams.delete("payment");
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, user, fetchTenantData]);
 
   const getNextDueDate = () => {
     if (!unit) return null;
@@ -217,9 +503,45 @@ export default function TenantDashboard() {
   const isPastDue = () => {
     if (!unit || !currentStatement) return false;
     if (currentStatement.status === "paid") return false;
+    
+    // If first_month_paid is true and we're showing a future month's statement, it's not past due
+    if (unit.first_month_paid) {
+      const currentMonth = format(new Date(), "MM/yyyy");
+      const [statementMonth, statementYear] = currentStatement.period_month.split('/').map(Number);
+      const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+      
+      // If the statement is for a future month, it's not past due
+      if (statementYear > currentYear || (statementYear === currentYear && statementMonth > currentMonthNum)) {
+        return false;
+      }
+    }
+    
     const today = new Date();
-    const dueDate = new Date(today.getFullYear(), today.getMonth(), unit.due_day);
+    const [month, year] = currentStatement.period_month.split('/').map(Number);
+    const dueDate = new Date(year, month - 1, unit.due_day);
     return today > dueDate;
+  };
+
+  const canMakePayment = () => {
+    // If no statement exists but unit exists, allow payment (will generate statement on click)
+    if (!unit) return false;
+    if (!currentStatement) return true; // Allow payment to trigger statement generation
+    
+    if (currentStatement.status === "paid") return false;
+    
+    // Can always pay if past due
+    if (isPastDue()) return true;
+    
+    // Calculate due date for the current statement's period
+    const today = new Date();
+    const [month, year] = currentStatement.period_month.split('/');
+    const statementDueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+    
+    // Calculate days until due date (can be negative if past due, but we already checked isPastDue)
+    const daysUntilDue = differenceInDays(statementDueDate, today);
+    
+    // Can pay if within 3 days of due date (3 days before, on due date, or after)
+    return daysUntilDue <= 3;
   };
 
   const handleQuickAction = (label: string) => {
@@ -245,7 +567,6 @@ export default function TenantDashboard() {
   };
 
   const quickActions = [
-    { label: "Payment Methods", icon: CreditCard, href: "/tenant/payments" },
     { label: "Documents", icon: FileText, action: () => handleQuickAction("Documents") },
     { label: "Maintenance", icon: Wrench, action: () => handleQuickAction("Maintenance") },
     { label: "Contact", icon: MessageSquare, action: () => handleQuickAction("Contact") },
@@ -257,6 +578,64 @@ export default function TenantDashboard() {
   const nextDueDate = getNextDueDate();
   const pastDue = isPastDue();
   const rentDue = currentStatement?.total_due || unit?.monthly_rent || 0;
+  const canPay = canMakePayment();
+
+  // Calculate late fee breakdown
+  const calculateLateFeeBreakdown = () => {
+    if (!currentStatement || !unit || currentStatement.status === "paid") {
+      return { flatFee: 0, dailyFee: 0 };
+    }
+    if (!currentStatement.period_month) {
+      return { flatFee: 0, dailyFee: 0 };
+    }
+    
+    const today = new Date();
+    const [month, year] = currentStatement.period_month.split('/');
+    const dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+    
+    // Normalize dates to start of day for accurate calculation
+    const todayStart = startOfDay(today);
+    const dueDateStart = startOfDay(dueDate);
+    
+    if (todayStart <= dueDateStart) {
+      return { flatFee: 0, dailyFee: 0 };
+    }
+    
+    const daysLate = differenceInDays(todayStart, dueDateStart);
+    
+    // Calculate flat late fee (one-time fee) from unit settings
+    let flatFee = 0;
+    if (unit.late_fee_type === 'flat' && unit.late_fee_amount) {
+      flatFee = Number(unit.late_fee_amount);
+    } else if (unit.late_fee_type === 'percent' && unit.late_fee_amount) {
+      flatFee = (Number(currentStatement.base_rent) * Number(unit.late_fee_amount)) / 100;
+    }
+    
+    // Daily late fee applies from day 1 (first day after due date)
+    const daysForDailyFee = Math.max(0, daysLate);
+    const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
+    const dailyFee = daysForDailyFee * dailyLateFeeRate;
+    
+    // Debug logging
+    console.log("[TenantDashboard] Late fee calculation:", {
+      periodMonth: currentStatement.period_month,
+      dueDay: unit.due_day,
+      dueDate: dueDateStart.toISOString(),
+      today: todayStart.toISOString(),
+      daysLate,
+      daysForDailyFee,
+      dailyLateFeeRate,
+      calculatedDailyFee: dailyFee,
+      flatFee,
+      unitDailyLateFee: unit.daily_late_fee,
+      lateFeeType: unit.late_fee_type,
+      lateFeeAmount: unit.late_fee_amount
+    });
+    
+    return { flatFee, dailyFee };
+  };
+
+  const { flatFee, dailyFee } = calculateLateFeeBreakdown();
 
   if (loading) {
     return (
@@ -315,10 +694,34 @@ export default function TenantDashboard() {
                 <Button 
                   variant="outline" 
                   className="bg-primary-foreground text-primary hover:bg-primary-foreground/90 border-0"
-                  onClick={() => setPaymentModalOpen(true)}
-                  disabled={!currentStatement || currentStatement.status === "paid"}
+                  onClick={async () => {
+                    if (!currentStatement && unit) {
+                      // If no statement exists, generate one first
+                      const currentMonth = format(new Date(), "MM/yyyy");
+                      try {
+                        toast.loading("Generating statement...");
+                        const { error } = await supabase.functions.invoke("generate-statement", {
+                          body: { unit_id: unit.id, period_month: currentMonth }
+                        });
+                        toast.dismiss();
+                        if (!error) {
+                          // Refresh data and then open payment modal
+                          await fetchTenantData();
+                          setPaymentModalOpen(true);
+                        } else {
+                          toast.error("Please wait for your statement to be generated");
+                        }
+                      } catch (err) {
+                        toast.dismiss();
+                        toast.error("Failed to generate statement");
+                      }
+                    } else {
+                      setPaymentModalOpen(true);
+                    }
+                  }}
+                  disabled={!canPay && !unit}
                 >
-                  {currentStatement?.status === "paid" ? "Paid" : "Pay Now"}
+                  {currentStatement?.status === "paid" ? "Paid" : "Pay"}
                   <ExternalLink className="ml-2 h-4 w-4" />
                 </Button>
               </div>
@@ -343,11 +746,26 @@ export default function TenantDashboard() {
                     </p>
                   </div>
                 )}
-                {Number(currentStatement.late_fee) > 0 && (
+                {flatFee > 0 && (
                   <div>
-                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Late Fee</p>
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Flat Fee</p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                      ${Number(currentStatement.late_fee).toLocaleString()}
+                      ${flatFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                )}
+                {dailyFee > 0 && (
+                  <div>
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>
+                      Daily Late Fee
+                      {unit.daily_late_fee && Number(unit.daily_late_fee) > 0 && (
+                        <span className="normal-case font-normal ml-1">
+                          (${Number(unit.daily_late_fee).toFixed(2)}/day)
+                        </span>
+                      )}
+                    </p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
+                      ${dailyFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                 )}
@@ -498,6 +916,11 @@ export default function TenantDashboard() {
                         <Home className="h-3.5 w-3.5" />
                         Unit {unit.unit_number}
                       </span>
+                      {unit.allow_split_payment && (
+                        <Badge variant="secondary" className="bg-primary-foreground/20 text-primary-foreground border-primary-foreground/30">
+                          Split Payments Allowed
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -509,8 +932,10 @@ export default function TenantDashboard() {
           <div>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-foreground">Recent Transactions</h2>
-              <Button variant="link" className="text-primary p-0 h-auto">
-                View All
+              <Button variant="link" className="text-primary px-2 py-1" asChild>
+                <Link to="/tenant/payments">
+                  View All
+                </Link>
               </Button>
             </div>
             <Card className="divide-y divide-border">
@@ -565,6 +990,7 @@ export default function TenantDashboard() {
         onOpenChange={setPaymentModalOpen}
         statement={currentStatement}
         allowSplitPayment={unit?.allow_split_payment || false}
+        splitPaymentFee={unit?.split_payment_fee || null}
       />
 
       {/* Documents Modal */}

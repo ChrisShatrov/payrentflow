@@ -28,8 +28,10 @@ interface NotificationRequest {
   };
 }
 
-const formatCurrency = (cents: number): string => {
-  return `$${(cents / 100).toFixed(2)}`;
+const formatCurrency = (amount: number): string => {
+  // Amount can be in dollars or cents, handle both
+  const dollars = amount < 1000 ? amount : amount / 100;
+  return `$${dollars.toFixed(2)}`;
 };
 
 const formatPeriod = (period: string): string => {
@@ -46,57 +48,97 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
     background-color: #f4f4f5;
   `;
 
-  const headerGradient = "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)";
+  // RentFlow branding colors: Teal/Blue-green primary
+  // Primary: hsl(172 66% 38%) = #2D9B8A (teal)
+  // Accent: hsl(16 85% 60%) = #F9734B (warm coral)
+  const primaryColor = "#2D9B8A"; // Teal
+  const primaryDark = "#1F7A6B"; // Darker teal
+  const accentColor = "#F9734B"; // Warm coral
+  const headerGradient = `linear-gradient(135deg, ${primaryColor} 0%, ${primaryDark} 100%)`;
 
   switch (type) {
     case "payment_success":
       return {
-        subject: `Payment Received - ${data.property_name} Unit ${data.unit_number}`,
+        subject: `Payment Received - ${data.property_name || 'Rent Payment'} - ${data.period_month ? formatPeriod(data.period_month) : 'Rent Payment'}`,
         html: `
           <!DOCTYPE html>
           <html>
-            <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
             <body style="${baseStyles}">
               <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+                <!-- Header with RentFlow branding -->
                 <tr>
-                  <td style="background: ${headerGradient}; border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-                    <div style="width: 60px; height: 60px; background: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
-                      <span style="font-size: 32px;">✓</span>
+                  <td style="background: ${headerGradient}; border-radius: 12px 12px 0 0; padding: 32px 40px; text-align: center;">
+                    <div style="margin-bottom: 20px;">
+                      <div style="display: inline-block; width: 48px; height: 48px; background: rgba(255,255,255,0.25); border-radius: 12px; margin: 0 auto; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);">
+                        <span style="font-size: 28px; color: white;">✓</span>
+                      </div>
                     </div>
-                    <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 700;">Payment Successful</h1>
+                    <h1 style="color: white; margin: 0 0 8px 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">Payment Received</h1>
+                    <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 16px; font-weight: 400;">Your rent payment has been successfully processed</p>
                   </td>
                 </tr>
+                
+                <!-- Main Content -->
                 <tr>
-                  <td style="background-color: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-                    <table width="100%" style="margin-bottom: 24px; border-collapse: collapse;">
-                      <tr>
-                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
-                          <span style="color: #6b7280; font-size: 14px;">Property</span><br>
-                          <span style="color: #111827; font-size: 16px; font-weight: 500;">${data.property_name}</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
-                          <span style="color: #6b7280; font-size: 14px;">Unit</span><br>
-                          <span style="color: #111827; font-size: 16px; font-weight: 500;">${data.unit_number}</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
-                          <span style="color: #6b7280; font-size: 14px;">Period</span><br>
-                          <span style="color: #111827; font-size: 16px; font-weight: 500;">${data.period_month ? formatPeriod(data.period_month) : 'N/A'}</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0;">
-                          <span style="color: #6b7280; font-size: 14px;">Amount Paid</span><br>
-                          <span style="color: #10b981; font-size: 24px; font-weight: 700;">${data.amount ? formatCurrency(data.amount) : '$0.00'}</span>
-                        </td>
-                      </tr>
-                    </table>
-                    <p style="color: #6b7280; font-size: 14px; text-align: center; margin: 0;">
-                      This is an automated notification from RentFlow.
-                    </p>
+                  <td style="background-color: white; padding: 0; border-radius: 0 0 12px 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);">
+                    <!-- Payment Details Card -->
+                    <div style="padding: 40px;">
+                      <!-- Amount Highlight -->
+                      <div style="background: linear-gradient(135deg, #F0FDFA 0%, #E6FFFA 100%); border: 2px solid ${primaryColor}; border-radius: 12px; padding: 24px; margin-bottom: 32px; text-align: center;">
+                        <p style="color: ${primaryDark}; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 8px 0;">Amount Paid</p>
+                        <p style="color: ${primaryColor}; font-size: 36px; font-weight: 700; margin: 0; letter-spacing: -1px;">${data.amount ? formatCurrency(data.amount) : '$0.00'}</p>
+                      </div>
+                      
+                      <!-- Payment Details -->
+                      <div style="background-color: #F9FAFB; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
+                        <h2 style="color: #111827; font-size: 18px; font-weight: 600; margin: 0 0 20px 0; padding-bottom: 12px; border-bottom: 2px solid #E5E7EB;">Payment Details</h2>
+                        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                          <tr>
+                            <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
+                              <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Property</span>
+                              <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.property_name || 'N/A'}</span>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
+                              <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Unit Number</span>
+                              <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.unit_number || 'N/A'}</span>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 12px 0;">
+                              <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Payment Period</span>
+                              <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.period_month ? formatPeriod(data.period_month) : 'N/A'}</span>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                      
+                      <!-- Success Message -->
+                      <div style="background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); border-left: 4px solid ${primaryColor}; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+                        <p style="color: #065F46; font-size: 14px; margin: 0; line-height: 1.6;">
+                          <strong style="color: ${primaryDark};">✓ Payment Confirmed</strong><br>
+                          Your payment has been successfully processed and your account has been updated.
+                        </p>
+                      </div>
+                      
+                      <!-- Footer -->
+                      <div style="text-align: center; padding-top: 24px; border-top: 1px solid #E5E7EB;">
+                        <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">
+                          This is an automated notification from
+                        </p>
+                        <p style="margin: 0;">
+                          <span style="color: ${primaryColor}; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Rent</span><span style="color: #111827; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Flow</span>
+                        </p>
+                        <p style="color: #9CA3AF; font-size: 12px; margin: 16px 0 0 0;">
+                          Thank you for using RentFlow for your rental payments.
+                        </p>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               </table>
@@ -238,41 +280,49 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
             <body style="${baseStyles}">
               <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
                 <tr>
-                  <td style="background: ${headerGradient}; border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-                    <div style="width: 60px; height: 60px; background: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
-                      <span style="font-size: 32px;">📄</span>
+                  <td style="background: ${headerGradient}; border-radius: 12px 12px 0 0; padding: 32px 40px; text-align: center;">
+                    <div style="margin-bottom: 20px;">
+                      <div style="display: inline-block; width: 48px; height: 48px; background: rgba(255,255,255,0.25); border-radius: 12px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);">
+                        <span style="font-size: 28px; color: white;">📄</span>
+                      </div>
                     </div>
-                    <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 700;">New Statement Available</h1>
+                    <h1 style="color: white; margin: 0 0 8px 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">New Statement Available</h1>
+                    <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 16px; font-weight: 400;">Your rent statement is ready</p>
                   </td>
                 </tr>
                 <tr>
-                  <td style="background-color: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                  <td style="background-color: white; padding: 40px; border-radius: 0 0 12px 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);">
                     <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
                       Your rent statement for <strong>${data.period_month ? formatPeriod(data.period_month) : 'the new period'}</strong> is now available.
                     </p>
-                    <table width="100%" style="margin-bottom: 24px; border-collapse: collapse;">
-                      <tr>
-                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
-                          <span style="color: #6b7280; font-size: 14px;">Property</span><br>
-                          <span style="color: #111827; font-size: 16px; font-weight: 500;">${data.property_name}</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
-                          <span style="color: #6b7280; font-size: 14px;">Unit</span><br>
-                          <span style="color: #111827; font-size: 16px; font-weight: 500;">${data.unit_number}</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0;">
-                          <span style="color: #6b7280; font-size: 14px;">Amount Due</span><br>
-                          <span style="color: #6366f1; font-size: 24px; font-weight: 700;">${data.total_due ? formatCurrency(data.total_due) : '$0.00'}</span>
-                        </td>
-                      </tr>
-                    </table>
-                    <p style="color: #6b7280; font-size: 14px; text-align: center; margin: 0;">
-                      Log in to RentFlow to view details and make a payment.
-                    </p>
+                    <div style="background-color: #F9FAFB; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
+                      <table width="100%" style="border-collapse: collapse;">
+                        <tr>
+                          <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
+                            <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Property</span>
+                            <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.property_name}</span>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
+                            <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Unit</span>
+                            <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.unit_number}</span>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 12px 0;">
+                            <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Amount Due</span>
+                            <span style="color: ${primaryColor}; font-size: 24px; font-weight: 700;">${data.total_due ? formatCurrency(data.total_due) : '$0.00'}</span>
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+                    <div style="text-align: center; padding-top: 24px; border-top: 1px solid #E5E7EB;">
+                      <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">This is an automated notification from</p>
+                      <p style="margin: 0;">
+                        <span style="color: ${primaryColor}; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Rent</span><span style="color: #111827; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Flow</span>
+                      </p>
+                    </div>
                   </td>
                 </tr>
               </table>
@@ -291,26 +341,32 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
             <body style="${baseStyles}">
               <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
                 <tr>
-                  <td style="background: ${headerGradient}; border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-                    <div style="width: 60px; height: 60px; background: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
-                      <span style="font-size: 32px;">🏠</span>
+                  <td style="background: ${headerGradient}; border-radius: 12px 12px 0 0; padding: 32px 40px; text-align: center;">
+                    <div style="margin-bottom: 20px;">
+                      <div style="display: inline-block; width: 48px; height: 48px; background: rgba(255,255,255,0.25); border-radius: 12px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);">
+                        <span style="font-size: 28px; color: white;">🏠</span>
+                      </div>
                     </div>
-                    <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 700;">Unit Details Updated</h1>
+                    <h1 style="color: white; margin: 0 0 8px 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">Unit Details Updated</h1>
+                    <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 16px; font-weight: 400;">Your unit information has been changed</p>
                   </td>
                 </tr>
                 <tr>
-                  <td style="background-color: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                  <td style="background-color: white; padding: 40px; border-radius: 0 0 12px 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);">
                     <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
                       The following details have been updated for <strong>${data.property_name} - Unit ${data.unit_number}</strong>:
                     </p>
-                    <div style="background-color: #f3f4f6; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
-                      <ul style="color: #374151; font-size: 14px; margin: 0; padding-left: 20px;">
+                    <div style="background-color: #F9FAFB; border-left: 4px solid ${primaryColor}; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+                      <ul style="color: #374151; font-size: 14px; margin: 0; padding-left: 20px; line-height: 1.8;">
                         ${(data.changes || []).map(change => `<li style="margin-bottom: 8px;">${change}</li>`).join('')}
                       </ul>
                     </div>
-                    <p style="color: #6b7280; font-size: 14px; text-align: center; margin: 0;">
-                      This is an automated notification from RentFlow.
-                    </p>
+                    <div style="text-align: center; padding-top: 24px; border-top: 1px solid #E5E7EB;">
+                      <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">This is an automated notification from</p>
+                      <p style="margin: 0;">
+                        <span style="color: ${primaryColor}; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Rent</span><span style="color: #111827; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Flow</span>
+                      </p>
+                    </div>
                   </td>
                 </tr>
               </table>
@@ -332,9 +388,16 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  console.log(`[SEND-NOTIFICATION-EMAIL] Function called`, {
+    method: req.method,
+    url: req.url,
+    headers: Object.fromEntries(req.headers.entries()),
+  });
+
   try {
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
     if (!resendApiKey) {
+      console.error("[SEND-NOTIFICATION-EMAIL] ERROR: RESEND_API_KEY is not configured");
       throw new Error("RESEND_API_KEY is not configured");
     }
 
@@ -342,43 +405,62 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { type, tenant_id, landlord_id, data }: NotificationRequest = await req.json();
+    const requestBody = await req.json();
+    console.log(`[SEND-NOTIFICATION-EMAIL] Request body received`, requestBody);
+    
+    const { type, tenant_id, landlord_id, data }: NotificationRequest = requestBody;
 
-    console.log(`Sending ${type} notification`, { tenant_id, landlord_id, data });
+    console.log(`[SEND-NOTIFICATION-EMAIL] Processing ${type} notification`, { tenant_id, landlord_id, data });
 
     const resend = new Resend(resendApiKey);
     const recipients: string[] = [];
 
     // Get tenant email if provided
     if (tenant_id) {
-      const { data: tenant } = await supabase
+      console.log(`[SEND-NOTIFICATION-EMAIL] Fetching tenant profile`, { tenant_id });
+      const { data: tenant, error: tenantError } = await supabase
         .from("profiles")
         .select("email, full_name")
         .eq("id", tenant_id)
         .single();
       
-      if (tenant?.email) {
+      if (tenantError) {
+        console.error(`[SEND-NOTIFICATION-EMAIL] Error fetching tenant:`, tenantError);
+      } else if (tenant?.email) {
         recipients.push(tenant.email);
-        console.log(`Added tenant email: ${tenant.email}`);
+        console.log(`[SEND-NOTIFICATION-EMAIL] Added tenant email: ${tenant.email}`);
+      } else {
+        console.log(`[SEND-NOTIFICATION-EMAIL] No email found for tenant: ${tenant_id}`);
       }
+    } else {
+      console.log(`[SEND-NOTIFICATION-EMAIL] No tenant_id provided`);
     }
 
     // Get landlord email if provided
     if (landlord_id) {
-      const { data: landlord } = await supabase
+      console.log(`[SEND-NOTIFICATION-EMAIL] Fetching landlord profile`, { landlord_id });
+      const { data: landlord, error: landlordError } = await supabase
         .from("profiles")
         .select("email, full_name")
         .eq("id", landlord_id)
         .single();
       
-      if (landlord?.email) {
+      if (landlordError) {
+        console.error(`[SEND-NOTIFICATION-EMAIL] Error fetching landlord:`, landlordError);
+      } else if (landlord?.email) {
         recipients.push(landlord.email);
-        console.log(`Added landlord email: ${landlord.email}`);
+        console.log(`[SEND-NOTIFICATION-EMAIL] Added landlord email: ${landlord.email}`);
+      } else {
+        console.log(`[SEND-NOTIFICATION-EMAIL] No email found for landlord: ${landlord_id}`);
       }
+    } else {
+      console.log(`[SEND-NOTIFICATION-EMAIL] No landlord_id provided`);
     }
 
+    console.log(`[SEND-NOTIFICATION-EMAIL] Total recipients: ${recipients.length}`, { recipients });
+
     if (recipients.length === 0) {
-      console.log("No recipients found, skipping email");
+      console.log("[SEND-NOTIFICATION-EMAIL] No recipients found, skipping email");
       return new Response(
         JSON.stringify({ success: true, message: "No recipients found" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -386,8 +468,15 @@ serve(async (req) => {
     }
 
     const { subject, html } = getEmailTemplate(type, data);
+    console.log(`[SEND-NOTIFICATION-EMAIL] Email template generated`, { subject, htmlLength: html.length });
 
-    const { error: emailError } = await resend.emails.send({
+    console.log(`[SEND-NOTIFICATION-EMAIL] Sending email via Resend`, {
+      from: "RentFlow <onboarding@resend.dev>",
+      to: recipients,
+      subject,
+    });
+
+    const { data: emailData, error: emailError } = await resend.emails.send({
       from: "RentFlow <onboarding@resend.dev>",
       to: recipients,
       subject,
@@ -395,20 +484,27 @@ serve(async (req) => {
     });
 
     if (emailError) {
-      console.error("Email error:", emailError);
-      throw new Error("Failed to send notification email");
+      console.error("[SEND-NOTIFICATION-EMAIL] Resend API error:", emailError);
+      throw new Error(`Failed to send notification email: ${emailError.message}`);
     }
 
-    console.log(`Successfully sent ${type} email to ${recipients.join(", ")}`);
+    console.log(`[SEND-NOTIFICATION-EMAIL] Successfully sent ${type} email`, {
+      recipients,
+      emailId: emailData?.id,
+    });
 
     return new Response(
-      JSON.stringify({ success: true, message: "Notification sent", recipients }),
+      JSON.stringify({ success: true, message: "Notification sent", recipients, emailId: emailData?.id }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error:", error);
+    console.error("[SEND-NOTIFICATION-EMAIL] ERROR:", {
+      message: error.message,
+      stack: error.stack,
+      error: String(error),
+    });
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: error.message, details: String(error) }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

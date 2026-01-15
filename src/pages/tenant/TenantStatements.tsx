@@ -28,6 +28,7 @@ interface UnitData {
   late_fee_type: string;
   late_fee_amount: number;
   daily_late_fee: number;
+  first_month_paid?: boolean;
   property: {
     name: string;
   } | null;
@@ -73,9 +74,11 @@ export default function TenantStatements() {
           monthly_rent,
           due_day,
           allow_split_payment,
+          split_payment_fee,
           late_fee_type,
           late_fee_amount,
           daily_late_fee,
+          first_month_paid,
           property:properties (name)
         `)
         .eq("tenant_id", user?.id)
@@ -92,12 +95,30 @@ export default function TenantStatements() {
           .order("period_month", { ascending: false });
 
         if (statementsData) {
-          setStatements(statementsData);
-          
-          // Find current month's statement
+          // Filter statements based on first_month_paid
           const currentMonth = format(new Date(), "MM/yyyy");
-          const current = statementsData.find(s => s.period_month === currentMonth);
-          setCurrentStatement(current || null);
+          let filteredStatements = statementsData;
+          
+          // If first_month_paid is true, exclude current month from the list
+          if (unitData.first_month_paid) {
+            filteredStatements = statementsData.filter(s => s.period_month !== currentMonth);
+          }
+          
+          setStatements(filteredStatements);
+          
+          // Find current statement - skip current month if first_month_paid is true
+          if (unitData.first_month_paid) {
+            // Look for next month's statement instead
+            const today = new Date();
+            const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+            const nextMonthStr = format(nextMonth, "MM/yyyy");
+            const nextMonthStatement = statementsData.find(s => s.period_month === nextMonthStr);
+            setCurrentStatement(nextMonthStatement || null);
+          } else {
+            // Normal flow - find current month's statement
+            const current = statementsData.find(s => s.period_month === currentMonth);
+            setCurrentStatement(current || null);
+          }
         }
       }
     } catch (error) {
@@ -150,8 +171,10 @@ export default function TenantStatements() {
       oneTimeFee = (Number(statement.base_rent) * unit.late_fee_amount) / 100;
     }
     
-    // Daily late fee
-    const dailyFee = daysLate * unit.daily_late_fee;
+    // Daily late fee (only applies starting from day 2)
+    // Daily fee only applies for days after the first day (so daysLate - 1)
+    const daysForDailyFee = Math.max(0, daysLate - 1);
+    const dailyFee = daysForDailyFee * unit.daily_late_fee;
     
     return oneTimeFee + dailyFee;
   };
@@ -377,6 +400,7 @@ export default function TenantStatements() {
         onOpenChange={setPaymentModalOpen}
         statement={currentStatement}
         allowSplitPayment={unit?.allow_split_payment || false}
+        splitPaymentFee={unit?.split_payment_fee || null}
       />
     </TenantLayout>
   );

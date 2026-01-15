@@ -19,6 +19,14 @@ async function sendNotificationEmail(
   data: Record<string, unknown>
 ) {
   try {
+    logStep("Calling send-notification-email function", {
+      type,
+      tenant_id,
+      landlord_id,
+      data,
+      url: `${supabaseUrl}/functions/v1/send-notification-email`,
+    });
+    
     const response = await fetch(`${supabaseUrl}/functions/v1/send-notification-email`, {
       method: 'POST',
       headers: {
@@ -28,14 +36,30 @@ async function sendNotificationEmail(
       body: JSON.stringify({ type, tenant_id, landlord_id, data }),
     });
     
+    const responseText = await response.text();
+    logStep("Email function response", {
+      status: response.status,
+      statusText: response.statusText,
+      response: responseText,
+    });
+    
     if (!response.ok) {
-      const error = await response.text();
-      logStep("Failed to send notification email", { error });
+      logStep("Failed to send notification email", { 
+        status: response.status,
+        error: responseText,
+      });
     } else {
-      logStep("Notification email sent successfully", { type });
+      logStep("Notification email sent successfully", { 
+        type,
+        response: responseText,
+      });
     }
   } catch (error) {
-    logStep("Error sending notification email", { error: String(error) });
+    logStep("Error sending notification email", { 
+      error: String(error),
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
   }
 }
 
@@ -265,33 +289,69 @@ serve(async (req) => {
         .single();
 
       if (payment && !paymentError) {
+        logStep("Payment found for session", {
+          paymentId: payment.id,
+          currentStatus: payment.status,
+          sessionId: sessionId,
+        });
+        
         // Only update if not already completed (idempotency)
         if (payment.status !== "completed") {
-          await supabaseAdmin
+          const updateResult = await supabaseAdmin
             .from("payments")
             .update({
               status: "completed",
               paid_at: new Date().toISOString(),
             })
-            .eq("id", payment.id);
+            .eq("id", payment.id)
+            .select();
+
+          if (updateResult.error) {
+            logStep("ERROR: Failed to update payment status", {
+              paymentId: payment.id,
+              error: updateResult.error.message,
+            });
+          } else {
+            logStep("Payment status updated to completed", {
+              paymentId: payment.id,
+              updatedRows: updateResult.data?.length,
+            });
+          }
 
           // Mark statement as paid
           if (payment.statement_id) {
-            await supabaseAdmin
+            const statementUpdateResult = await supabaseAdmin
               .from("statements")
               .update({ status: "paid" })
-              .eq("id", payment.statement_id);
+              .eq("id", payment.statement_id)
+              .select();
 
-            logStep("Payment and statement marked as paid", {
-              paymentId: payment.id,
-              statementId: payment.statement_id,
-            });
+            if (statementUpdateResult.error) {
+              logStep("ERROR: Failed to update statement status", {
+                statementId: payment.statement_id,
+                error: statementUpdateResult.error.message,
+              });
+            } else {
+              logStep("Statement status updated to paid", {
+                statementId: payment.statement_id,
+                updatedRows: statementUpdateResult.data?.length,
+              });
+            }
           }
 
           // Send payment success notification to both tenant and landlord
           const unit = payment.units as any;
           const statement = payment.statements as any;
           if (unit) {
+            logStep("Preparing to send payment success emails", {
+              tenant_id: unit.tenant_id,
+              landlord_id: unit.properties?.landlord_id,
+              property_name: unit.properties?.name,
+              unit_number: unit.unit_number,
+              amount: payment.amount,
+              period_month: statement?.period_month,
+            });
+            
             await sendNotificationEmail(
               supabaseUrl,
               supabaseAnonKey,
@@ -305,6 +365,8 @@ serve(async (req) => {
                 period_month: statement?.period_month,
               }
             );
+          } else {
+            logStep("WARNING: Unit data not found, cannot send payment emails", { paymentId: payment.id });
           }
         } else {
           logStep("Payment already marked as completed (idempotent)", { paymentId: payment.id });
@@ -345,55 +407,128 @@ serve(async (req) => {
           .eq("stripe_payment_id", paymentIntentId)
           .single();
 
-        // If not found, try to get the session from payment intent metadata and look up by session ID
+        // If not found by payment intent ID, try to find by session ID
+        // For Checkout Sessions, we store the session.id as stripe_payment_id
         if (paymentError && paymentIntent) {
-          // Retrieve the payment intent to get session ID from metadata if available
-          const fullPaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-          const sessionId = fullPaymentIntent.metadata?.session_id;
+          logStep("Payment not found by payment intent ID, trying to find by session", {
+            paymentIntentId,
+          });
           
-          if (sessionId) {
-            const result = await supabaseAdmin
-              .from("payments")
-              .select(`
-                *,
-                statements(period_month),
-                units!inner(
-                  id,
-                  unit_number,
-                  tenant_id,
-                  property_id,
-                  properties!inner(id, name, landlord_id)
-                )
-              `)
-              .eq("stripe_payment_id", sessionId)
-              .single();
-            payment = result.data;
-            paymentError = result.error;
+          // Retrieve the payment intent to get session ID
+          try {
+            const fullPaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+              expand: ['latest_charge.payment_method'],
+            });
+            
+            // Get session ID from payment intent - it might be in metadata or we need to find it
+            // For Checkout Sessions, the session ID is usually in the payment intent's metadata
+            // or we can search for the checkout session that created this payment intent
+            const sessionId = fullPaymentIntent.metadata?.session_id;
+            
+            // If not in metadata, try to find the checkout session that created this payment intent
+            let sessionIdToSearch = sessionId;
+            if (!sessionIdToSearch) {
+              // List checkout sessions and find one with this payment intent
+              const sessions = await stripe.checkout.sessions.list({
+                payment_intent: paymentIntentId,
+                limit: 1,
+              });
+              if (sessions.data.length > 0) {
+                sessionIdToSearch = sessions.data[0].id;
+                logStep("Found session ID from checkout sessions list", { sessionId: sessionIdToSearch });
+              }
+            }
+          
+            if (sessionIdToSearch) {
+              logStep("Looking up payment by session ID", { sessionId: sessionIdToSearch });
+              const result = await supabaseAdmin
+                .from("payments")
+                .select(`
+                  *,
+                  statements(period_month),
+                  units!inner(
+                    id,
+                    unit_number,
+                    tenant_id,
+                    property_id,
+                    properties!inner(id, name, landlord_id)
+                  )
+                `)
+                .eq("stripe_payment_id", sessionIdToSearch)
+                .single();
+              payment = result.data;
+              paymentError = result.error;
+              
+              if (payment) {
+                logStep("Payment found by session ID", { paymentId: payment.id });
+              } else {
+                logStep("Payment not found by session ID either", { 
+                  sessionId: sessionIdToSearch,
+                  error: paymentError?.message,
+                });
+              }
+            } else {
+              logStep("Could not determine session ID from payment intent", {
+                paymentIntentId,
+                hasMetadata: !!fullPaymentIntent.metadata,
+              });
+            }
+          } catch (stripeError) {
+            logStep("Error retrieving payment intent from Stripe", {
+              error: String(stripeError),
+            });
           }
         }
 
         if (payment && !paymentError) {
+          logStep("Payment found for payment intent", {
+            paymentId: payment.id,
+            currentStatus: payment.status,
+            paymentIntentId: paymentIntentId,
+          });
+          
           // Only update if not already completed (idempotency)
           if (payment.status !== "completed") {
-            await supabaseAdmin
+            const updateResult = await supabaseAdmin
               .from("payments")
               .update({
                 status: "completed",
                 paid_at: new Date().toISOString(),
               })
-              .eq("id", payment.id);
+              .eq("id", payment.id)
+              .select();
+
+            if (updateResult.error) {
+              logStep("ERROR: Failed to update payment status from payment_intent", {
+                paymentId: payment.id,
+                error: updateResult.error.message,
+              });
+            } else {
+              logStep("Payment status updated to completed (from payment_intent)", {
+                paymentId: payment.id,
+                updatedRows: updateResult.data?.length,
+              });
+            }
 
             // Mark statement as paid
             if (payment.statement_id) {
-              await supabaseAdmin
+              const statementUpdateResult = await supabaseAdmin
                 .from("statements")
                 .update({ status: "paid" })
-                .eq("id", payment.statement_id);
+                .eq("id", payment.statement_id)
+                .select();
 
-              logStep("Payment and statement marked as paid", {
-                paymentId: payment.id,
-                statementId: payment.statement_id,
-              });
+              if (statementUpdateResult.error) {
+                logStep("ERROR: Failed to update statement status from payment_intent", {
+                  statementId: payment.statement_id,
+                  error: statementUpdateResult.error.message,
+                });
+              } else {
+                logStep("Statement status updated to paid (from payment_intent)", {
+                  statementId: payment.statement_id,
+                  updatedRows: statementUpdateResult.data?.length,
+                });
+              }
             }
 
             // Send payment success notification to both tenant and landlord

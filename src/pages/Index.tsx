@@ -22,10 +22,10 @@ const Index = () => {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild>
-              <Link to="/auth?mode=signin">Sign In</Link>
+              <Link to="/auth">Sign In</Link>
             </Button>
             <Button size="sm" asChild>
-              <Link to="/auth?mode=signup">Get Started</Link>
+              <Link to="/signup">Get Started</Link>
             </Button>
           </div>
         </div>
@@ -53,7 +53,7 @@ const Index = () => {
 
               <div className="flex flex-col sm:flex-row items-start gap-4 mb-8 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
                 <Button size="lg" className="gap-2" asChild>
-                  <Link to="/auth?mode=signup">
+                  <Link to="/signup">
                     Start for Free
                     <ArrowRight className="w-4 h-4" />
                   </Link>
@@ -202,7 +202,7 @@ const Index = () => {
                 className="bg-card text-primary hover:bg-card/90 shadow-lg gap-2"
                 asChild
               >
-                <Link to="/auth">
+                <Link to="/signup">
                   Get Started Free
                   <ArrowRight className="w-4 h-4" />
                 </Link>

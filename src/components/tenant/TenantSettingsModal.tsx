@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Mail, Lock } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, Mail, Lock, Home } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
 
 interface TenantSettingsModalProps {
@@ -19,9 +21,33 @@ export function TenantSettingsModal({
   onOpenChange, 
   currentEmail 
 }: TenantSettingsModalProps) {
+  const { user } = useAuth();
   const [email, setEmail] = useState(currentEmail);
   const [emailLoading, setEmailLoading] = useState(false);
   const [passwordLoading, setPasswordLoading] = useState(false);
+  const [unit, setUnit] = useState<{ unit_number: string; allow_split_payment: boolean } | null>(null);
+
+  useEffect(() => {
+    if (open && user) {
+      fetchUnit();
+    }
+  }, [open, user]);
+
+  const fetchUnit = async () => {
+    try {
+      const { data } = await supabase
+        .from("units")
+        .select("unit_number, allow_split_payment")
+        .eq("tenant_id", user?.id)
+        .maybeSingle();
+      
+      if (data) {
+        setUnit(data);
+      }
+    } catch (error) {
+      console.error("Error fetching unit:", error);
+    }
+  };
 
   const handleEmailUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,7 +87,7 @@ export function TenantSettingsModal({
     setPasswordLoading(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(currentEmail, {
-        redirectTo: `${window.location.origin}/auth?mode=reset`,
+        redirectTo: `${window.location.origin}/reset-password`,
       });
 
       if (error) throw error;
@@ -115,6 +141,30 @@ export function TenantSettingsModal({
               Update Email
             </Button>
           </form>
+
+          <Separator />
+
+          {/* Unit Information */}
+          {unit && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Home className="h-4 w-4" />
+                Unit Information
+              </div>
+              <div className="space-y-2 p-4 bg-muted/50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Unit Number</span>
+                  <span className="text-sm font-medium">Unit {unit.unit_number}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Split Payments</span>
+                  <Badge variant={unit.allow_split_payment ? "default" : "secondary"}>
+                    {unit.allow_split_payment ? "Allowed" : "Not Allowed"}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          )}
 
           <Separator />
 

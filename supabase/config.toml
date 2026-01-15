@@ -21,6 +21,9 @@ verify_jwt = false
 [functions.check-connect-status]
 verify_jwt = false
 
+[functions.get-stripe-login-link]
+verify_jwt = false
+
 [functions.send-tenant-invite]
 verify_jwt = false
 

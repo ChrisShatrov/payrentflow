@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AdminLayout } from "@/components/admin/AdminLayout";
-import { AddTenantDialog } from "@/components/admin/AddTenantDialog";
-import { InviteTenantDialog } from "@/components/admin/InviteTenantDialog";
+// import { AddTenantDialog } from "@/components/admin/AddTenantDialog";
+// import { InviteTenantDialog } from "@/components/admin/InviteTenantDialog";
 import { UploadLeaseDialog } from "@/components/admin/UploadLeaseDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,9 @@ import {
 } from "@/components/ui/table";
 
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { Users, Mail, Phone, FileText, Download, Loader2 } from "lucide-react";
+import { format } from "date-fns";
 
 interface TenantData {
   id: string;
@@ -33,6 +35,7 @@ interface TenantData {
 }
 
 export default function AdminTenants() {
+  const { user } = useAuth();
   const [tenants, setTenants] = useState<TenantData[]>([]);
   const [loading, setLoading] = useState(true);
   const [leaseDialogOpen, setLeaseDialogOpen] = useState(false);
@@ -40,36 +43,79 @@ export default function AdminTenants() {
   const [downloadingTenantId, setDownloadingTenantId] = useState<string | null>(null);
 
   const fetchTenants = async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
     try {
-      // Fetch all tenant profiles
-      const { data: profiles, error: profilesError } = await supabase
-        .from("profiles")
-        .select("id, email, full_name, phone")
-        .eq("role", "tenant");
-
-      if (profilesError) throw profilesError;
-
-      // Fetch units with property info
-      const { data: units, error: unitsError } = await supabase
-        .from("units")
-        .select("id, tenant_id, unit_number, monthly_rent, property_id, lease_pdf_url");
-
-      if (unitsError) throw unitsError;
-
-      // Fetch properties
+      // First, fetch only properties owned by this landlord
       const { data: properties, error: propertiesError } = await supabase
         .from("properties")
-        .select("id, name");
+        .select("id, name")
+        .eq("landlord_id", user.id);
 
       if (propertiesError) throw propertiesError;
 
-      // Fetch unpaid/overdue statements
+      // If landlord has no properties, return empty array
+      if (!properties || properties.length === 0) {
+        setTenants([]);
+        setLoading(false);
+        return;
+      }
+
+      const propertyIds = properties.map((p) => p.id);
+
+      // Fetch only units that belong to this landlord's properties
+      const { data: units, error: unitsError } = await supabase
+        .from("units")
+        .select("id, tenant_id, unit_number, monthly_rent, property_id, lease_pdf_url, first_month_paid, due_day")
+        .in("property_id", propertyIds);
+
+      if (unitsError) throw unitsError;
+
+      // If no units, return empty array
+      if (!units || units.length === 0) {
+        setTenants([]);
+        setLoading(false);
+        return;
+      }
+
+      // Get only tenant IDs that are assigned to units in this landlord's properties
+      const tenantIds = units
+        .map((u) => u.tenant_id)
+        .filter((id): id is string => id !== null);
+
+      // If no tenants assigned, return empty array
+      if (tenantIds.length === 0) {
+        setTenants([]);
+        setLoading(false);
+        return;
+      }
+
+      // Fetch only tenant profiles that are assigned to this landlord's units
+      const { data: profiles, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, email, full_name, phone")
+        .eq("role", "tenant")
+        .in("id", tenantIds);
+
+      if (profilesError) throw profilesError;
+
+      // Get unit IDs for filtering statements
+      const unitIds = units.map((u) => u.id);
+
+      // Fetch unpaid/overdue statements only for this landlord's units
       const { data: statements, error: statementsError } = await supabase
         .from("statements")
-        .select("unit_id, total_due, status")
-        .in("status", ["unpaid", "partial", "overdue"]);
+        .select("unit_id, total_due, status, period_month")
+        .in("status", ["unpaid", "partial", "overdue"])
+        .in("unit_id", unitIds);
 
       if (statementsError) throw statementsError;
+
+      // Get current month for filtering (format: MM/yyyy)
+      const currentMonth = format(new Date(), "MM/yyyy");
 
       // Map data together
       const tenantsData: TenantData[] = (profiles || []).map((profile) => {
@@ -77,8 +123,35 @@ export default function AdminTenants() {
         const property = unit ? (properties || []).find((p) => p.id === unit.property_id) : null;
         
         // Calculate total owed from unpaid statements
+        // If first_month_paid is true, exclude current month's statement
+        // Also exclude future statements that aren't due yet
         const tenantStatements = unit 
-          ? (statements || []).filter((s) => s.unit_id === unit.id)
+          ? (statements || []).filter((s) => {
+              if (s.unit_id !== unit.id) return false;
+              
+              // If first_month_paid is true, exclude current month's statement
+              if (unit.first_month_paid && s.period_month === currentMonth) {
+                return false;
+              }
+              
+              // Check if this is a future month's statement that isn't due yet
+              const [statementMonth, statementYear] = s.period_month.split('/').map(Number);
+              const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+              
+              // If statement is for a future month, check if it's due
+              if (statementYear > currentYear || (statementYear === currentYear && statementMonth > currentMonthNum)) {
+                // Future month - check if it's due yet based on due_day
+                const today = new Date();
+                const statementDueDate = new Date(statementYear, statementMonth - 1, unit.due_day);
+                
+                // Only include if the due date has passed
+                if (today <= statementDueDate) {
+                  return false; // Not due yet, exclude it
+                }
+              }
+              
+              return true;
+            })
           : [];
         const totalOwed = tenantStatements.reduce((sum, s) => sum + Number(s.total_due), 0);
 
@@ -112,8 +185,10 @@ export default function AdminTenants() {
   };
 
   useEffect(() => {
-    fetchTenants();
-  }, []);
+    if (user) {
+      fetchTenants();
+    }
+  }, [user]);
 
   const handleDownloadLease = async (tenant: TenantData) => {
     if (!tenant.unitId || !tenant.leaseUrl) return;
@@ -178,10 +253,11 @@ export default function AdminTenants() {
             <h1 className="text-3xl font-bold text-foreground">Tenants</h1>
             <p className="text-muted-foreground mt-1">Manage your tenants and invitations</p>
           </div>
-          <div className="flex gap-3">
+          {/* Buttons hidden - users sign up on their own */}
+          {/* <div className="flex gap-3">
             <AddTenantDialog onTenantAdded={fetchTenants} />
             <InviteTenantDialog onTenantInvited={fetchTenants} />
-          </div>
+          </div> */}
         </div>
 
         {/* Content */}
@@ -194,12 +270,13 @@ export default function AdminTenants() {
             <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No tenants yet</h3>
             <p className="text-muted-foreground mb-6">
-              Get started by adding or inviting your first tenant.
+              Tenants will appear here once they sign up and are assigned to a unit.
             </p>
-            <div className="flex gap-3 justify-center">
+            {/* Buttons hidden - users sign up on their own */}
+            {/* <div className="flex gap-3 justify-center">
               <AddTenantDialog onTenantAdded={fetchTenants} />
               <InviteTenantDialog onTenantInvited={fetchTenants} />
-            </div>
+            </div> */}
           </div>
         ) : (
           <div className="bg-card border border-border rounded-xl overflow-hidden">

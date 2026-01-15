@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Sheet,
   SheetContent,
@@ -11,9 +11,33 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Calendar, DollarSign, User, AlertTriangle, Pencil, Check, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+
+interface Tenant {
+  id: string;
+  full_name: string | null;
+  email: string;
+}
 
 interface UnitDetailSheetProps {
   unit: {
@@ -22,9 +46,11 @@ interface UnitDetailSheetProps {
     monthly_rent: number;
     due_day: number;
     allow_split_payment: boolean;
+    split_payment_fee: number | null;
     late_fee_amount: number;
     daily_late_fee: number;
     tenant_id: string | null;
+    first_month_paid?: boolean;
     tenantName?: string | null;
     tenantEmail?: string | null;
   } | null;
@@ -36,13 +62,92 @@ interface UnitDetailSheetProps {
 export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: UnitDetailSheetProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [showTenantWarning, setShowTenantWarning] = useState(false);
+  const [pendingTenantId, setPendingTenantId] = useState<string>("");
+  const isConfirmingRef = useRef(false); // Use ref to track confirmation state synchronously
   const [formData, setFormData] = useState({
     monthly_rent: 0,
     due_day: 1,
     late_fee_amount: 0,
     daily_late_fee: 0,
     allow_split_payment: false,
+    split_payment_fee: 30.00,
+    tenant_id: "",
+    first_month_paid: false,
   });
+
+  const fetchTenants = async () => {
+    try {
+      // Use the database function to get available tenants (confirmed email, no unit assigned)
+      const { data: availableTenantsData, error: functionError } = await supabase.rpc('get_available_tenants' as any);
+
+      let tenants: Tenant[] = [];
+
+      if (functionError || !availableTenantsData) {
+        console.error("Error fetching available tenants:", functionError);
+        // Fallback to old method if function doesn't exist
+        const { data: allTenants, error: tenantsError } = await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .eq("role", "tenant")
+          .order("full_name", { ascending: true, nullsFirst: false });
+
+        if (tenantsError) throw tenantsError;
+
+        const { data: assignedUnits, error: unitsError } = await supabase
+          .from("units")
+          .select("tenant_id")
+          .not("tenant_id", "is", null);
+
+        if (unitsError) throw unitsError;
+
+        const assignedTenantIds = (assignedUnits || [])
+          .map((u) => u.tenant_id)
+          .filter((id): id is string => id !== null);
+
+        tenants = (allTenants || []).filter(
+          (t) => !assignedTenantIds.includes(t.id) || (unit?.tenant_id && t.id === unit.tenant_id)
+        ) as Tenant[];
+      } else {
+        tenants = (availableTenantsData || []) as Tenant[];
+      }
+
+      // If current unit has a tenant, add them to the list so they can be reassigned
+      // (even though they're already assigned, we want to show them in the dropdown)
+      if (unit?.tenant_id) {
+        // Get the current tenant's profile
+        const { data: currentTenantProfile } = await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .eq("id", unit.tenant_id)
+          .eq("role", "tenant")
+          .single();
+
+        if (currentTenantProfile) {
+          // Check if this tenant is already in the list (shouldn't be if they're assigned)
+          const isAlreadyInList = tenants.some(t => t.id === currentTenantProfile.id);
+          
+          if (!isAlreadyInList) {
+            // Add current tenant to the list so they can be reassigned
+            // Note: We assume if they're already assigned, they have confirmed their email
+            tenants = [currentTenantProfile as Tenant, ...tenants];
+          }
+        }
+      }
+
+      setTenants(tenants);
+    } catch (error) {
+      console.error("Error fetching tenants:", error);
+      toast.error("Failed to load tenants");
+    }
+  };
+
+  useEffect(() => {
+    if (isEditing && open && unit) {
+      fetchTenants();
+    }
+  }, [isEditing, open, unit]);
 
   if (!unit) return null;
 
@@ -56,6 +161,62 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     }
   };
 
+  // Get tenant names for warning dialog - defined early so it's accessible in both views
+  const getTenantName = (tenantId: string | null) => {
+    if (!tenantId) return "No tenant";
+    const tenant = tenants.find(t => t.id === tenantId);
+    return tenant ? (tenant.full_name || tenant.email) : "Unknown";
+  };
+
+  // Define tenant change handlers before they're used in JSX
+  const handleTenantChangeConfirm = () => {
+    // Update formData with the confirmed tenant selection immediately
+    // Store pendingTenantId in a variable before clearing it
+    const confirmedTenantId = pendingTenantId;
+    console.log("Confirming tenant change:", { 
+      pendingTenantId, 
+      confirmedTenantId,
+      currentFormDataTenantId: formData.tenant_id,
+      willSetTo: confirmedTenantId || ""
+    });
+    
+    // Set confirming ref FIRST (synchronous) to prevent cancel handler from running
+    isConfirmingRef.current = true;
+    
+    // Update formData with the confirmed tenant ID
+    setFormData((prev) => {
+      const newFormData = { ...prev, tenant_id: confirmedTenantId || "" };
+      console.log("Updating formData.tenant_id:", { 
+        from: prev.tenant_id, 
+        to: newFormData.tenant_id 
+      });
+      return newFormData;
+    });
+    
+    // Close dialog - the ref will prevent cancel from running
+    setShowTenantWarning(false);
+    setPendingTenantId("");
+    
+    // Reset confirming ref after dialog closes
+    setTimeout(() => {
+      isConfirmingRef.current = false;
+    }, 100);
+  };
+
+  const handleTenantChangeCancel = () => {
+    // Only cancel if we're not in the process of confirming
+    if (isConfirmingRef.current) {
+      console.log("Skipping cancel - confirmation in progress");
+      return;
+    }
+    
+    setShowTenantWarning(false);
+    setPendingTenantId("");
+    // Reset formData tenant_id to current unit's tenant_id
+    setFormData((prev) => ({ ...prev, tenant_id: unit.tenant_id || "" }));
+    console.log("Tenant selection cancelled, formData reset to:", { tenant_id: unit.tenant_id || "" });
+  };
+
   const handleEdit = () => {
     setFormData({
       monthly_rent: unit.monthly_rent,
@@ -63,6 +224,9 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       late_fee_amount: unit.late_fee_amount,
       daily_late_fee: unit.daily_late_fee,
       allow_split_payment: unit.allow_split_payment,
+      split_payment_fee: unit.split_payment_fee || 30.00,
+      tenant_id: unit.tenant_id || "",
+      first_month_paid: unit.first_month_paid || false,
     });
     setIsEditing(true);
   };
@@ -91,19 +255,91 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       if (formData.allow_split_payment !== unit.allow_split_payment) {
         changes.push(`Split payments ${formData.allow_split_payment ? 'enabled' : 'disabled'}`);
       }
+      if (formData.allow_split_payment && formData.split_payment_fee !== (unit.split_payment_fee || 30.00)) {
+        changes.push(`Split payment fee changed from $${unit.split_payment_fee || 30.00} to $${formData.split_payment_fee}`);
+      }
+      if (formData.first_month_paid !== (unit.first_month_paid || false)) {
+        changes.push(`First month paid status changed from ${unit.first_month_paid ? 'paid' : 'unpaid'} to ${formData.first_month_paid ? 'paid' : 'unpaid'}`);
+      }
+      if (formData.tenant_id !== (unit.tenant_id || "")) {
+        const oldTenant = tenants.find(t => t.id === unit.tenant_id);
+        const newTenant = tenants.find(t => t.id === formData.tenant_id);
+        if (formData.tenant_id === "") {
+          changes.push(`Tenant removed${oldTenant ? ` (${oldTenant.full_name || oldTenant.email})` : ""}`);
+        } else if (unit.tenant_id === null) {
+          changes.push(`Tenant assigned: ${newTenant?.full_name || newTenant?.email || "Unknown"}`);
+        } else {
+          changes.push(`Tenant changed from ${oldTenant?.full_name || oldTenant?.email || "Unknown"} to ${newTenant?.full_name || newTenant?.email || "Unknown"}`);
+        }
+      }
 
-      const { error } = await supabase
+      const updateData: any = {
+        monthly_rent: formData.monthly_rent,
+        due_day: formData.due_day,
+        late_fee_amount: formData.late_fee_amount,
+        daily_late_fee: formData.daily_late_fee,
+        allow_split_payment: formData.allow_split_payment,
+        split_payment_fee: formData.allow_split_payment ? formData.split_payment_fee : null,
+        first_month_paid: formData.first_month_paid,
+      };
+
+      // Handle tenant_id update - explicitly set to null if empty string, otherwise use the value
+      // Always include tenant_id in the update to ensure it's saved
+      if (formData.tenant_id === "" || formData.tenant_id === "__none__" || !formData.tenant_id) {
+        updateData.tenant_id = null;
+      } else {
+        updateData.tenant_id = formData.tenant_id;
+      }
+      
+      console.log("Tenant ID update logic:", {
+        formDataTenantId: formData.tenant_id,
+        updateDataTenantId: updateData.tenant_id,
+        currentUnitTenantId: unit.tenant_id,
+        willUpdate: updateData.tenant_id !== unit.tenant_id
+      });
+
+      console.log("Updating unit with data:", { 
+        unitId: unit.id, 
+        updateData, 
+        formDataTenantId: formData.tenant_id,
+        currentTenantId: unit.tenant_id 
+      });
+
+      const { data: updatedUnit, error } = await supabase
         .from("units")
-        .update({
-          monthly_rent: formData.monthly_rent,
-          due_day: formData.due_day,
-          late_fee_amount: formData.late_fee_amount,
-          daily_late_fee: formData.daily_late_fee,
-          allow_split_payment: formData.allow_split_payment,
-        })
-        .eq("id", unit.id);
+        .update(updateData)
+        .eq("id", unit.id)
+        .select("id, tenant_id")
+        .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error updating unit:", error);
+        console.error("Update data that failed:", updateData);
+        throw error;
+      }
+
+      if (!updatedUnit) {
+        throw new Error("Unit update succeeded but no data returned");
+      }
+
+      console.log("Unit updated successfully:", updatedUnit);
+      console.log("Updated tenant_id:", updatedUnit.tenant_id);
+      
+      // Verify the update worked by fetching again
+      const { data: verifyUnit, error: verifyError } = await supabase
+        .from("units")
+        .select("id, tenant_id")
+        .eq("id", unit.id)
+        .single();
+      
+      if (verifyError) {
+        console.error("Error verifying update:", verifyError);
+      } else {
+        console.log("Verified tenant_id after update:", verifyUnit?.tenant_id);
+        if (verifyUnit?.tenant_id !== updateData.tenant_id) {
+          console.error("WARNING: Tenant ID mismatch! Expected:", updateData.tenant_id, "Got:", verifyUnit?.tenant_id);
+        }
+      }
 
       // Send notification if there are changes and tenant is assigned
       if (changes.length > 0 && unit.tenant_id) {
@@ -136,8 +372,20 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       }
 
       toast.success("Unit updated successfully");
+      
+      // Call onUnitUpdated to refresh the parent component's data BEFORE closing
+      if (onUnitUpdated) {
+        console.log("Calling onUnitUpdated to refresh parent data...");
+        await onUnitUpdated(); // Wait for refresh to complete
+        console.log("onUnitUpdated completed");
+      }
+      
       setIsEditing(false);
-      onUnitUpdated?.();
+      
+      // Close the sheet after a brief delay to ensure UI updates
+      setTimeout(() => {
+        onOpenChange(false);
+      }, 200);
     } catch (error) {
       console.error("Error updating unit:", error);
       toast.error("Failed to update unit");
@@ -148,22 +396,95 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
 
   if (isEditing) {
     return (
-      <Sheet open={open} onOpenChange={(newOpen) => {
-        if (!newOpen) setIsEditing(false);
-        onOpenChange(newOpen);
-      }}>
-        <SheetContent className="sm:max-w-md">
-          <SheetHeader>
-            <SheetTitle className="flex items-center justify-between">
-              <span>Edit Unit {unit.unit_number}</span>
-              <Badge variant={unit.tenant_id ? "default" : "secondary"}>
-                {unit.tenant_id ? "Occupied" : "Vacant"}
-              </Badge>
-            </SheetTitle>
-            <SheetDescription>Update unit rental settings</SheetDescription>
-          </SheetHeader>
+      <>
+        <Sheet open={open} onOpenChange={(newOpen) => {
+          if (!newOpen) setIsEditing(false);
+          onOpenChange(newOpen);
+        }}>
+          <SheetContent className="sm:max-w-md">
+            <SheetHeader>
+              <SheetTitle className="flex items-center justify-between">
+                <span>Edit Unit {unit.unit_number}</span>
+                <Badge variant={unit.tenant_id ? "default" : "secondary"}>
+                  {unit.tenant_id ? "Occupied" : "Vacant"}
+                </Badge>
+              </SheetTitle>
+              <SheetDescription>Update unit rental settings</SheetDescription>
+            </SheetHeader>
 
-          <div className="mt-6 space-y-5">
+            <div className="mt-6 space-y-5">
+            {/* Assign Tenant */}
+            <div className="space-y-2">
+              <Label>Assign Tenant (optional)</Label>
+              <Select 
+                value={formData.tenant_id || "__none__"} 
+                onValueChange={(value) => {
+                  console.log("Select onValueChange called:", value);
+                  const newTenantId = value === "__none__" ? "" : value;
+                  const currentFormTenantId = formData.tenant_id || "";
+                  const currentUnitTenantId = unit.tenant_id || "";
+                  
+                  console.log("Tenant selection:", {
+                    newTenantId,
+                    currentFormTenantId,
+                    currentUnitTenantId,
+                    willShowDialog: newTenantId !== currentUnitTenantId
+                  });
+                  
+                  // If selecting the same tenant that's already in formData, no warning needed
+                  if (newTenantId === currentFormTenantId) {
+                    console.log("Same tenant selected as in formData, skipping dialog");
+                    return;
+                  }
+                  
+                  // Show warning dialog immediately when tenant is selected (if different from original unit tenant)
+                  if (newTenantId !== currentUnitTenantId) {
+                    console.log("Setting pending tenant and showing dialog");
+                    setPendingTenantId(newTenantId);
+                    setShowTenantWarning(true);
+                    console.log("Dialog state set to true");
+                  } else {
+                    // If selecting back to the original tenant, just update formData directly
+                    console.log("Selecting back to original tenant, updating formData directly");
+                    setFormData((prev) => ({ ...prev, tenant_id: newTenantId }));
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a tenant" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No tenant</SelectItem>
+                  {tenants.map((tenant) => (
+                    <SelectItem key={tenant.id} value={tenant.id}>
+                      {tenant.full_name 
+                        ? `${tenant.full_name} (${tenant.email})`
+                        : tenant.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {tenants.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No tenants available. Add tenants in the Tenants tab first.
+                </p>
+              )}
+              {/* First Month Paid Checkbox - only show when assigning a tenant */}
+              {formData.tenant_id && formData.tenant_id !== "__none__" && (
+                <div className="flex items-center space-x-2 pt-2">
+                  <Checkbox
+                    id="firstMonthPaid"
+                    checked={formData.first_month_paid}
+                    onCheckedChange={(checked) => setFormData({ ...formData, first_month_paid: checked === true })}
+                    disabled={saving}
+                  />
+                  <Label htmlFor="firstMonthPaid" className="text-sm font-normal cursor-pointer">
+                    First month has been paid (tenant not responsible for current month)
+                  </Label>
+                </div>
+              )}
+            </div>
+
             {/* Monthly Rent */}
             <div className="space-y-2">
               <Label htmlFor="monthly_rent">Monthly Rent ($)</Label>
@@ -220,15 +541,30 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
             </div>
 
             {/* Allow Split Payment */}
-            <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
-              <div>
-                <p className="font-medium">Allow Split Payments</p>
-                <p className="text-sm text-muted-foreground">Let tenant pay in multiple installments</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
+                <div>
+                  <p className="font-medium">Allow Split Payments</p>
+                  <p className="text-sm text-muted-foreground">Let tenant pay in multiple installments</p>
+                </div>
+                <Switch
+                  checked={formData.allow_split_payment}
+                  onCheckedChange={(checked) => setFormData({ ...formData, allow_split_payment: checked })}
+                />
               </div>
-              <Switch
-                checked={formData.allow_split_payment}
-                onCheckedChange={(checked) => setFormData({ ...formData, allow_split_payment: checked })}
-              />
+              {formData.allow_split_payment && (
+                <div className="space-y-2">
+                  <Label htmlFor="split_payment_fee">Split Payment Fee ($)</Label>
+                  <Input
+                    id="split_payment_fee"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.split_payment_fee}
+                    onChange={(e) => setFormData({ ...formData, split_payment_fee: parseFloat(e.target.value) || 30.00 })}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Actions */}
@@ -245,23 +581,68 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Tenant Assignment Warning Dialog - Outside Sheet for proper modal rendering */}
+      <AlertDialog open={showTenantWarning} onOpenChange={(open) => {
+        if (!open && !isConfirmingRef.current) {
+          // If dialog is closed without confirming (not via confirm button), reset the dropdown
+          handleTenantChangeCancel();
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Confirm Tenant Assignment Change
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 pt-2">
+              <p className="font-medium">You are about to change the tenant assignment for this unit:</p>
+              <div className="bg-muted/50 p-3 rounded-lg space-y-1 text-sm">
+                <p>
+                  <span className="font-medium">Current tenant:</span> {getTenantName(unit.tenant_id)}
+                </p>
+                <p>
+                  <span className="font-medium">New tenant:</span> {getTenantName(pendingTenantId || null)}
+                </p>
+              </div>
+              <div className="pt-2 space-y-1">
+                <p className="font-medium text-foreground">Please be aware:</p>
+                <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
+                  <li>This will update the tenant assignment when you click "Save Changes"</li>
+                  <li>If removing a tenant, they will lose access to this unit</li>
+                  <li>If assigning a new tenant, they will gain access to this unit</li>
+                  <li>Any existing statements and payments will remain associated with the previous tenant</li>
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleTenantChangeCancel}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleTenantChangeConfirm}>
+              Confirm Change
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      </>
     );
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="sm:max-w-md">
-        <SheetHeader>
-          <SheetTitle className="flex items-center justify-between">
-            <span>Unit {unit.unit_number}</span>
-            <Badge variant={unit.tenant_id ? "default" : "secondary"}>
-              {unit.tenant_id ? "Occupied" : "Vacant"}
-            </Badge>
-          </SheetTitle>
-          <SheetDescription>Unit details and rental information</SheetDescription>
-        </SheetHeader>
+    <>
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent className="sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle className="flex items-center justify-between">
+              <span>Unit {unit.unit_number}</span>
+              <Badge variant={unit.tenant_id ? "default" : "secondary"}>
+                {unit.tenant_id ? "Occupied" : "Vacant"}
+              </Badge>
+            </SheetTitle>
+            <SheetDescription>Unit details and rental information</SheetDescription>
+          </SheetHeader>
 
-        <div className="mt-6 space-y-6">
+          <div className="mt-6 space-y-6">
           {/* Monthly Rent */}
           <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">
             <div className="bg-primary/10 p-2 rounded-lg">
@@ -338,8 +719,52 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
             <Pencil className="h-4 w-4 mr-2" />
             Edit Unit Settings
           </Button>
-        </div>
-      </SheetContent>
-    </Sheet>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Tenant Assignment Warning Dialog - Outside Sheet for proper modal rendering */}
+      <AlertDialog open={showTenantWarning} onOpenChange={(open) => {
+        if (!open && !isConfirmingRef.current) {
+          // If dialog is closed without confirming (not via confirm button), reset the dropdown
+          handleTenantChangeCancel();
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Confirm Tenant Assignment Change
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 pt-2">
+              <p className="font-medium">You are about to change the tenant assignment for this unit:</p>
+              <div className="bg-muted/50 p-3 rounded-lg space-y-1 text-sm">
+                <p>
+                  <span className="font-medium">Current tenant:</span> {getTenantName(unit.tenant_id)}
+                </p>
+                <p>
+                  <span className="font-medium">New tenant:</span> {getTenantName(pendingTenantId || null)}
+                </p>
+              </div>
+              <div className="pt-2 space-y-1">
+                <p className="font-medium text-foreground">Please be aware:</p>
+                <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
+                  <li>This will update the tenant assignment when you click "Save Changes"</li>
+                  <li>If removing a tenant, they will lose access to this unit</li>
+                  <li>If assigning a new tenant, they will gain access to this unit</li>
+                  <li>Any existing statements and payments will remain associated with the previous tenant</li>
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleTenantChangeCancel}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleTenantChangeConfirm}>
+              Confirm Change
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { Home, FileText, CreditCard, Settings, LogOut, Bell, User } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Home, FileText, Settings, LogOut, User, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -9,6 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { NotificationsDropdown } from "./NotificationsDropdown";
 
 interface TenantLayoutProps {
   children: ReactNode;
@@ -16,12 +17,13 @@ interface TenantLayoutProps {
 
 const navItems = [
   { label: "Dashboard", href: "/tenant", icon: Home },
-  { label: "Statements", href: "/tenant/statements", icon: FileText },
   { label: "Payments", href: "/tenant/payments", icon: CreditCard },
+  { label: "Statements", href: "/tenant/statements", icon: FileText },
 ];
 
 export function TenantLayout({ children }: TenantLayoutProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, signOut } = useAuth();
 
   return (
@@ -59,12 +61,7 @@ export function TenantLayout({ children }: TenantLayoutProps) {
 
           {/* Right section */}
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="relative">
-              <Bell className="h-5 w-5 text-muted-foreground" />
-              <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] font-medium text-accent-foreground">
-                2
-              </span>
-            </Button>
+            <NotificationsDropdown />
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -83,8 +80,12 @@ export function TenantLayout({ children }: TenantLayoutProps) {
                 </DropdownMenuItem>
                 <DropdownMenuItem 
                   onClick={async () => {
+                    // Mark that we're signing out to prevent redirect loops
+                    // Use localStorage so it persists across page reload
+                    localStorage.setItem('just_signed_out', 'true');
                     await signOut();
-                    window.location.href = "/auth?mode=signin";
+                    // Use window.location.href to force a full page reload and clear all state
+                    window.location.href = "/auth";
                   }} 
                   className="text-destructive"
                 >
