@@ -1,11 +1,21 @@
 import { Link } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { Button } from "@/components/ui/button";
 import { Building2, Users, CreditCard, BarChart3, Shield, Clock, CheckCircle2, ArrowRight, TrendingUp, Zap } from "lucide-react";
 import heroImage from "@/assets/hero-apartment.jpg";
 
 const Index = () => {
   return (
-    <div className="min-h-screen bg-background">
+    <>
+      <Helmet>
+        <title>RentFlow — Online Rent Payments & Property Management</title>
+        <meta
+          name="description"
+          content="Collect rent online, automate late fees, track payments, and manage properties all in one place. Trusted by 2,000+ property managers."
+        />
+        <link rel="canonical" href="https://www.payrentflow.com/" />
+      </Helmet>
+      <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-card/80 backdrop-blur-md border-b border-border">
         <div className="container flex items-center justify-between h-16">
@@ -233,7 +243,8 @@ const Index = () => {
           </div>
         </div>
       </footer>
-    </div>
+      </div>
+    </>
   );
 };
 

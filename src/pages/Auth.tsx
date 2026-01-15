@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +36,11 @@ export default function Auth() {
   // Determine if signup based on route path
   const isSignUpRoute = location.pathname === "/signup";
   const [isSignUp, setIsSignUp] = useState(isSignUpRoute);
+  
+  const pageTitle = isSignUp ? "Sign Up — RentFlow" : "Sign In — RentFlow";
+  const pageDescription = isSignUp 
+    ? "Create your RentFlow account to start managing properties and collecting rent online. Free to get started."
+    : "Sign in to your RentFlow account to manage properties, track payments, and collect rent online.";
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showStripeStep, setShowStripeStep] = useState(false);
@@ -394,7 +400,13 @@ export default function Auth() {
   }
 
   return (
-    <div className="min-h-screen bg-primary/5 flex items-center justify-center p-4">
+    <>
+      <Helmet>
+        <title>{pageTitle}</title>
+        <meta name="description" content={pageDescription} />
+        <link rel="canonical" href={`https://www.payrentflow.com${location.pathname}`} />
+      </Helmet>
+      <div className="min-h-screen bg-primary/5 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Back to home link */}
         <Link 
@@ -544,6 +556,7 @@ export default function Auth() {
           </p>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
