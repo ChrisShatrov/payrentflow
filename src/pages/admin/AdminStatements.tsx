@@ -42,6 +42,7 @@ interface StatementData {
   base_rent: number;
   late_fee: number | null;
   additional_fees: number | null;
+  split_fee: number | null;
   total_due: number;
   status: string;
   pdf_url: string | null;
@@ -59,6 +60,7 @@ interface YearlySummary {
   totalBaseRent: number;
   totalLateFees: number;
   totalAdditionalFees: number;
+  totalSplitFees: number;
   totalDue: number;
   totalPaid: number;
   totalUnpaid: number;
@@ -136,6 +138,7 @@ export default function AdminStatements() {
         base_rent: s.base_rent,
         late_fee: s.late_fee,
         additional_fees: s.additional_fees,
+        split_fee: s.split_fee,
         total_due: s.total_due,
         status: s.status,
         pdf_url: s.pdf_url,
@@ -215,6 +218,7 @@ export default function AdminStatements() {
           totalBaseRent: 0,
           totalLateFees: 0,
           totalAdditionalFees: 0,
+          totalSplitFees: 0,
           totalDue: 0,
           totalPaid: 0,
           totalUnpaid: 0,
@@ -226,12 +230,54 @@ export default function AdminStatements() {
       summary.totalBaseRent += statement.base_rent;
       summary.totalLateFees += statement.late_fee || 0;
       summary.totalAdditionalFees += statement.additional_fees || 0;
+      summary.totalSplitFees += statement.split_fee || 0;
       summary.totalDue += statement.total_due;
 
       if (statement.status === "paid") {
         summary.totalPaid += statement.total_due;
       } else {
         summary.totalUnpaid += statement.total_due;
+      }
+    });
+
+    // Validate calculations and fix any discrepancies
+    Object.values(summaries).forEach((summary) => {
+      // Calculate expected total due from components
+      const expectedTotalDue = summary.totalBaseRent + summary.totalLateFees + summary.totalAdditionalFees + summary.totalSplitFees;
+      
+      // Validate: totalDue should equal baseRent + fees
+      const tolerance = 0.01; // Allow for floating point rounding
+      if (Math.abs(summary.totalDue - expectedTotalDue) > tolerance) {
+        console.warn(
+          `[AdminStatements] Calculation discrepancy for ${summary.propertyName} (${summary.year}):`,
+          {
+            calculatedTotalDue: summary.totalDue,
+            expectedTotalDue,
+            difference: summary.totalDue - expectedTotalDue,
+            baseRent: summary.totalBaseRent,
+            lateFees: summary.totalLateFees,
+            additionalFees: summary.totalAdditionalFees,
+          }
+        );
+        // Use the expected value to ensure consistency
+        summary.totalDue = expectedTotalDue;
+      }
+
+      // Validate: totalDue should equal paid + unpaid
+      const expectedFromStatus = summary.totalPaid + summary.totalUnpaid;
+      if (Math.abs(summary.totalDue - expectedFromStatus) > tolerance) {
+        console.warn(
+          `[AdminStatements] Status discrepancy for ${summary.propertyName} (${summary.year}):`,
+          {
+            calculatedTotalDue: summary.totalDue,
+            expectedFromStatus,
+            difference: summary.totalDue - expectedFromStatus,
+            totalPaid: summary.totalPaid,
+            totalUnpaid: summary.totalUnpaid,
+          }
+        );
+        // Adjust unpaid to match (paid is more reliable)
+        summary.totalUnpaid = summary.totalDue - summary.totalPaid;
       }
     });
 
@@ -598,8 +644,32 @@ export default function AdminStatements() {
                             <div>
                               <p className="text-sm text-muted-foreground mb-1">Total Fees</p>
                               <p className="text-lg font-semibold text-amber-600">
-                                ${(summary.totalLateFees + summary.totalAdditionalFees).toLocaleString()}
+                                ${(summary.totalLateFees + summary.totalAdditionalFees + summary.totalSplitFees).toLocaleString()}
                               </p>
+                              {/* Detailed fee breakdown */}
+                              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                                {summary.totalLateFees > 0 && (
+                                  <div className="flex justify-between">
+                                    <span>Late Fees:</span>
+                                    <span>${summary.totalLateFees.toLocaleString()}</span>
+                                  </div>
+                                )}
+                                {summary.totalAdditionalFees > 0 && (
+                                  <div className="flex justify-between">
+                                    <span>Additional Fees:</span>
+                                    <span>${summary.totalAdditionalFees.toLocaleString()}</span>
+                                  </div>
+                                )}
+                                {summary.totalSplitFees > 0 && (
+                                  <div className="flex justify-between">
+                                    <span>Split Payment Fees:</span>
+                                    <span>${summary.totalSplitFees.toLocaleString()}</span>
+                                  </div>
+                                )}
+                                {summary.totalLateFees === 0 && summary.totalAdditionalFees === 0 && summary.totalSplitFees === 0 && (
+                                  <div className="text-muted-foreground">No fees</div>
+                                )}
+                              </div>
                             </div>
                             <div>
                               <p className="text-sm text-muted-foreground mb-1">Total Paid</p>

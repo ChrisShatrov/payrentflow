@@ -19,7 +19,7 @@ export function AdminSidebar() {
   const handleSignOut = async () => {
     // Mark that we're signing out to prevent redirect loops
     // Use localStorage so it persists across page reload
-    localStorage.setItem('just_signed_out', 'true');
+    localStorage.setItem('just_signed_out', Date.now().toString());
     await signOut();
     // Use window.location.href to force a full page reload and clear all state
     window.location.href = "/auth";

@@ -81,6 +81,7 @@ export default function TenantDashboard() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [tenantProfile, setTenantProfile] = useState<{ full_name: string; email: string } | null>(null);
+  const [paymentStreak, setPaymentStreak] = useState<number | null>(null);
 
   const fetchTenantData = useCallback(async () => {
     try {
@@ -442,6 +443,64 @@ export default function TenantDashboard() {
             setTotalPaid(yearPayments.reduce((sum, p) => sum + Number(p.amount), 0));
           }
         }
+
+        // Calculate payment streak
+        const calculatePaymentStreak = async () => {
+          // Get all completed payments with their statements, ordered chronologically (oldest first)
+          const { data: allPayments } = await supabase
+            .from("payments")
+            .select(`
+              id,
+              paid_at,
+              statement_id,
+              statements!inner(
+                id,
+                period_month,
+                status
+              )
+            `)
+            .eq("unit_id", unitData.id)
+            .eq("status", "completed")
+            .not("paid_at", "is", null)
+            .order("paid_at", { ascending: true }); // Oldest first for chronological processing
+
+          if (!allPayments || allPayments.length === 0) {
+            setPaymentStreak(null); // No payments = show dashes
+            return;
+          }
+
+          // Calculate streak chronologically (oldest to newest)
+          // Each on-time payment increments the streak
+          // A late payment resets the streak to 1
+          let streak = 0;
+
+          for (const payment of allPayments) {
+            const statement = Array.isArray(payment.statements) ? payment.statements[0] : payment.statements;
+            if (!statement || !payment.paid_at) continue;
+
+            // Parse statement period_month to get due date
+            const [month, year] = statement.period_month.split('/').map(Number);
+            const dueDate = new Date(year, month - 1, unitData.due_day);
+            const paidDate = parseISO(payment.paid_at);
+
+            // Payment is on-time if paid on or before due date
+            const isOnTime = paidDate <= dueDate;
+
+            if (isOnTime) {
+              // On-time payment: increment streak
+              streak++;
+            } else {
+              // Late payment: reset streak to 1
+              streak = 1;
+            }
+          }
+
+          // If we have payments, streak should be at least 1 (even if all were late)
+          // But if no payments exist, streak is null
+          setPaymentStreak(streak > 0 ? streak : null);
+        };
+
+        await calculatePaymentStreak();
       } else {
         console.warn("[TenantDashboard] No unit found for tenant_id:", user.id);
         // Show helpful error message
@@ -708,21 +767,23 @@ export default function TenantDashboard() {
         {/* Hero Payment Card */}
         <Card className={`relative overflow-hidden p-8 ${pastDue ? 'bg-destructive' : 'bg-primary'}`}>
           <div className="relative z-10">
-            {/* Status Badge */}
-            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm mb-4 ${
-              pastDue 
-                ? 'bg-destructive-foreground/20 text-destructive-foreground' 
-                : 'bg-primary-foreground/20 text-primary-foreground'
-            }`}>
-              <span className={`h-2 w-2 rounded-full ${pastDue ? 'bg-destructive-foreground' : 'bg-accent'} animate-pulse`} />
-              {pastDue 
-                ? `⚠️ Account Past Due` 
-                : daysUntilDue > 0 
-                  ? `Next payment in ${daysUntilDue} days` 
-                  : daysUntilDue === 0 
-                    ? "Payment due today" 
-                    : `Payment overdue by ${Math.abs(daysUntilDue)} days`}
-            </div>
+            {/* Status Badge - Only show if unit exists */}
+            {unit && (
+              <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm mb-4 ${
+                pastDue 
+                  ? 'bg-destructive-foreground/20 text-destructive-foreground' 
+                  : 'bg-primary-foreground/20 text-primary-foreground'
+              }`}>
+                <span className={`h-2 w-2 rounded-full ${pastDue ? 'bg-destructive-foreground' : 'bg-accent'} animate-pulse`} />
+                {pastDue 
+                  ? `⚠️ Account Past Due` 
+                  : daysUntilDue > 0 
+                    ? `Next payment in ${daysUntilDue} days` 
+                    : daysUntilDue === 0 
+                      ? "Payment due today" 
+                      : `Payment overdue by ${Math.abs(daysUntilDue)} days`}
+              </div>
+            )}
 
             <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
               <div>
@@ -738,10 +799,14 @@ export default function TenantDashboard() {
                     <span>Please make payment immediately to avoid additional fees</span>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 mt-3 text-primary-foreground/80 text-sm">
-                    <TrendingUp className="h-4 w-4" />
-                    <span>On-time payment streak: 12 months</span>
-                  </div>
+                  paymentStreak !== null && (
+                    <div className="flex items-center gap-2 mt-3 text-primary-foreground/80 text-sm">
+                      <TrendingUp className="h-4 w-4" />
+                      <span>
+                        On-time payment streak: {paymentStreak} {paymentStreak === 1 ? 'month' : 'months'}
+                      </span>
+                    </div>
+                  )
                 )}
               </div>
 
@@ -868,8 +933,12 @@ export default function TenantDashboard() {
               </div>
             </div>
             <p className="text-sm text-muted-foreground mb-1">Payment Streak</p>
-            <p className="text-2xl font-bold text-foreground">12 months</p>
-            <p className="text-xs text-muted-foreground mt-1">On-time payments</p>
+            <p className="text-2xl font-bold text-foreground">
+              {paymentStreak !== null ? `${paymentStreak} ${paymentStreak === 1 ? 'month' : 'months'}` : '—'}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {paymentStreak !== null ? 'On-time payments' : 'No payments yet'}
+            </p>
           </Card>
 
           <Card className={`p-5 ${pastDue ? 'border-destructive/50 bg-destructive/5' : ''}`}>
