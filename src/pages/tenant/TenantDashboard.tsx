@@ -231,16 +231,68 @@ export default function TenantDashboard() {
         const shouldSkipCurrentMonth = unitData.first_month_paid === true;
 
         if (!shouldSkipCurrentMonth) {
-          // Fetch current month's statement (format: MM/yyyy)
-          const { data: statementData } = await supabase
+          // First, check if current month's statement exists and is paid
+          const { data: currentMonthStatement } = await supabase
             .from("statements")
             .select("*")
             .eq("unit_id", unitData.id)
             .eq("period_month", currentMonth)
             .maybeSingle();
 
-          if (statementData) {
-            setCurrentStatement(statementData);
+          // If current month is paid, look for next unpaid statement
+          if (currentMonthStatement && currentMonthStatement.status === "paid") {
+            console.log("[TenantDashboard] Current month is paid, looking for next unpaid statement");
+            
+            // Find the next unpaid statement (could be next month or future)
+            // Order by period_month ascending to get the earliest unpaid statement
+            const { data: unpaidStatements } = await supabase
+              .from("statements")
+              .select("*")
+              .eq("unit_id", unitData.id)
+              .in("status", ["unpaid", "overdue", "partial"])
+              .order("period_month", { ascending: true })
+              .limit(1);
+            
+            if (unpaidStatements && unpaidStatements.length > 0) {
+              console.log("[TenantDashboard] Found next unpaid statement:", unpaidStatements[0].period_month);
+              setCurrentStatement(unpaidStatements[0]);
+            } else {
+              // No unpaid statements, try to generate next month's statement
+              const today = new Date();
+              const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+              const nextMonthStr = format(nextMonth, "MM/yyyy");
+              
+              console.log("[TenantDashboard] No unpaid statements found, generating next month:", nextMonthStr);
+              try {
+                const { data: generatedStatement } = await supabase.functions.invoke("generate-statement", {
+                  body: { unit_id: unitData.id, period_month: nextMonthStr }
+                });
+
+                if (generatedStatement) {
+                  const { data: newStatement } = await supabase
+                    .from("statements")
+                    .select("*")
+                    .eq("unit_id", unitData.id)
+                    .eq("period_month", nextMonthStr)
+                    .maybeSingle();
+                  
+                  if (newStatement) {
+                    console.log("[TenantDashboard] Generated and set next month statement:", nextMonthStr);
+                    setCurrentStatement(newStatement);
+                  } else {
+                    setCurrentStatement(null);
+                  }
+                } else {
+                  setCurrentStatement(null);
+                }
+              } catch (error) {
+                console.error("Error generating next month statement:", error);
+                setCurrentStatement(null);
+              }
+            }
+          } else if (currentMonthStatement) {
+            // Current month statement exists and is not paid
+            setCurrentStatement(currentMonthStatement);
           } else {
             // If no statement for current month, try to generate one
             try {
@@ -540,7 +592,10 @@ export default function TenantDashboard() {
     // Calculate days until due date (can be negative if past due, but we already checked isPastDue)
     const daysUntilDue = differenceInDays(statementDueDate, today);
     
-    // Can pay if within 3 days of due date (3 days before, on due date, or after)
+    // If balance is up to date (not past due), only allow payment within 3 days of due date
+    // This means: daysUntilDue must be <= 3 (3 days before, on due date, or after)
+    // But since we already checked isPastDue() above, if we get here, we're not past due
+    // So we only allow if daysUntilDue <= 3
     return daysUntilDue <= 3;
   };
 
