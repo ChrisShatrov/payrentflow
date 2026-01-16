@@ -363,7 +363,7 @@ const Index = () => {
                     <Check className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="font-semibold text-green-900 dark:text-green-100">Cheaper Than Competitors</p>
-                      <p className="text-sm text-green-700 dark:text-green-300">No monthly subscriptions or hidden fees. Save thousands compared to traditional property management software.</p>
+                      <p className="text-sm text-green-700 dark:text-green-300">No monthly subscriptions or hidden fees for property owners. Save thousands compared to traditional property management software.</p>
                     </div>
                   </div>
                 </div>
