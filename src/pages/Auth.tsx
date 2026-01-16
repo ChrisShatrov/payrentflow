@@ -420,7 +420,7 @@ export default function Auth() {
         <div className="bg-card rounded-2xl shadow-card p-8 border border-border/50 animate-fade-in">
           {/* Logo */}
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold">
+            <h1 className="text-3xl font-extrabold tracking-tight">
               <span className="text-primary">Rent</span>
               <span className="text-foreground">Flow</span>
             </h1>

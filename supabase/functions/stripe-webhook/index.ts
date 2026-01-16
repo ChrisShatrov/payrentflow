@@ -263,6 +263,43 @@ serve(async (req) => {
       });
     }
 
+    // Handle expired checkout sessions (user opened but didn't complete)
+    if (event.type === "checkout.session.expired") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const sessionId = session.id;
+
+      logStep("Checkout session expired", { sessionId });
+
+      // Find and mark payment as failed
+      const { data: payment, error: paymentError } = await supabaseAdmin
+        .from("payments")
+        .select("id, status")
+        .eq("stripe_payment_id", sessionId)
+        .eq("status", "pending")
+        .maybeSingle();
+
+      if (payment && !paymentError) {
+        const { error: updateError } = await supabaseAdmin
+          .from("payments")
+          .update({ status: "failed" })
+          .eq("id", payment.id);
+
+        if (updateError) {
+          logStep("ERROR: Failed to mark expired payment as failed", {
+            paymentId: payment.id,
+            error: updateError.message,
+          });
+        } else {
+          logStep("Expired payment marked as failed", { paymentId: payment.id });
+        }
+      }
+
+      return new Response(JSON.stringify({ received: true, action: "expired_payment_marked_failed" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
     // Handle successful checkout session completion (primary event for Checkout Sessions)
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
@@ -270,6 +307,18 @@ serve(async (req) => {
       const paymentIntentId = session.payment_intent as string | null;
 
       logStep("Checkout session completed", { sessionId, paymentIntentId });
+
+      // Only process if payment was actually successful
+      if (session.payment_status !== "paid") {
+        logStep("Checkout session completed but payment not paid", {
+          sessionId,
+          payment_status: session.payment_status,
+        });
+        return new Response(JSON.stringify({ received: true, action: "ignored_unpaid_session" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
 
       // Find payment by session ID (which is what we stored)
       const { data: payment, error: paymentError } = await supabaseAdmin

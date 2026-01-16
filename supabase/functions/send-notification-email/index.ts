@@ -97,25 +97,25 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
                       <div style="background-color: #F9FAFB; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
                         <h2 style="color: #111827; font-size: 18px; font-weight: 600; margin: 0 0 20px 0; padding-bottom: 12px; border-bottom: 2px solid #E5E7EB;">Payment Details</h2>
                         <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
-                          <tr>
+                      <tr>
                             <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
                               <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Property</span>
                               <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.property_name || 'N/A'}</span>
-                            </td>
-                          </tr>
-                          <tr>
+                        </td>
+                      </tr>
+                      <tr>
                             <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
                               <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Unit Number</span>
                               <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.unit_number || 'N/A'}</span>
-                            </td>
-                          </tr>
-                          <tr>
-                            <td style="padding: 12px 0;">
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 12px 0;">
                               <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Payment Period</span>
                               <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.period_month ? formatPeriod(data.period_month) : 'N/A'}</span>
-                            </td>
-                          </tr>
-                        </table>
+                        </td>
+                      </tr>
+                    </table>
                       </div>
                       
                       <!-- Success Message -->
@@ -136,7 +136,7 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
                         </p>
                         <p style="color: #9CA3AF; font-size: 12px; margin: 16px 0 0 0;">
                           Thank you for using RentFlow for your rental payments.
-                        </p>
+                    </p>
                       </div>
                     </div>
                   </td>
@@ -297,25 +297,25 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
                     </p>
                     <div style="background-color: #F9FAFB; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
                       <table width="100%" style="border-collapse: collapse;">
-                        <tr>
+                      <tr>
                           <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
                             <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Property</span>
                             <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.property_name}</span>
-                          </td>
-                        </tr>
-                        <tr>
+                        </td>
+                      </tr>
+                      <tr>
                           <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
                             <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Unit</span>
                             <span style="color: #111827; font-size: 16px; font-weight: 600;">${data.unit_number}</span>
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style="padding: 12px 0;">
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 12px 0;">
                             <span style="color: #6B7280; font-size: 14px; font-weight: 500; display: block; margin-bottom: 4px;">Amount Due</span>
                             <span style="color: ${primaryColor}; font-size: 24px; font-weight: 700;">${data.total_due ? formatCurrency(data.total_due) : '$0.00'}</span>
-                          </td>
-                        </tr>
-                      </table>
+                        </td>
+                      </tr>
+                    </table>
                     </div>
                     <div style="text-align: center; padding-top: 24px; border-top: 1px solid #E5E7EB;">
                       <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">This is an automated notification from</p>
@@ -365,7 +365,7 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
                       <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">This is an automated notification from</p>
                       <p style="margin: 0;">
                         <span style="color: ${primaryColor}; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Rent</span><span style="color: #111827; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Flow</span>
-                      </p>
+                    </p>
                     </div>
                   </td>
                 </tr>
@@ -407,7 +407,7 @@ serve(async (req) => {
 
     const requestBody = await req.json();
     console.log(`[SEND-NOTIFICATION-EMAIL] Request body received`, requestBody);
-    
+
     const { type, tenant_id, landlord_id, data }: NotificationRequest = requestBody;
 
     console.log(`[SEND-NOTIFICATION-EMAIL] Processing ${type} notification`, { tenant_id, landlord_id, data });
@@ -470,14 +470,16 @@ serve(async (req) => {
     const { subject, html } = getEmailTemplate(type, data);
     console.log(`[SEND-NOTIFICATION-EMAIL] Email template generated`, { subject, htmlLength: html.length });
 
+    const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") || "RentFlow <support@payrentflow.com>";
+    
     console.log(`[SEND-NOTIFICATION-EMAIL] Sending email via Resend`, {
-      from: "RentFlow <onboarding@resend.dev>",
+      from: fromEmail,
       to: recipients,
       subject,
     });
 
     const { data: emailData, error: emailError } = await resend.emails.send({
-      from: "RentFlow <onboarding@resend.dev>",
+      from: fromEmail,
       to: recipients,
       subject,
       html,

@@ -110,7 +110,7 @@ export default function AdminDashboard() {
           if (unitsData && unitsData.length > 0) {
             const unitIds = unitsData.map((u) => u.id);
 
-            // Get payments for these units
+            // Get only completed payments for these units (landlords should only see successful payments)
             const { data: paymentsData } = await supabase
               .from("payments")
               .select(`
@@ -136,6 +136,7 @@ export default function AdminDashboard() {
                 )
               `)
               .in("unit_id", unitIds)
+              .eq("status", "completed")
               .order("created_at", { ascending: false })
               .limit(3);
 

@@ -18,7 +18,7 @@ interface TenantEmailRequest {
   custom_subject?: string;
 }
 
-const HELP_EMAIL = "shatrovchris@gmail.com";
+const HELP_EMAIL = "support@payrentflow.com";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -99,8 +99,9 @@ serve(async (req) => {
 
     console.log(`Sending ${type} email to: ${recipientEmail}`);
 
+    const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") || "RentFlow <support@payrentflow.com>";
     const { data: emailData, error: emailError } = await resend.emails.send({
-      from: "RentFlow <onboarding@resend.dev>",
+      from: fromEmail,
       to: [recipientEmail],
       subject: emailSubject,
       html: emailHtml,

@@ -1,25 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
   <defs>
-    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="houseGradient" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#14b8a6;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#0d9488;stop-opacity:1" />
     </linearGradient>
   </defs>
   
-  <circle cx="32" cy="32" r="30" fill="url(#bgGradient)" />
+  <!-- Simple house outline with rounded corners, larger and centered -->
+  <path d="M 15 30 
+           L 15 80 
+           Q 15 85, 20 85
+           L 80 85
+           Q 85 85, 85 80
+           L 85 30
+           L 50 5
+           Z" 
+        fill="url(#houseGradient)" 
+        stroke="none"/>
   
-  <!-- Professional dollar sign -->
-  <g stroke="white" stroke-width="5" stroke-linecap="round" fill="none">
-    <!-- Vertical line -->
-    <line x1="32" y1="14" x2="32" y2="50" />
-    
-    <!-- S-curve -->
-    <path d="M 20 22 
-             C 20 18, 28 18, 32 22
-             C 36 18, 44 18, 44 22
-             C 44 26, 36 30, 32 30
-             C 28 30, 20 34, 20 38
-             C 20 42, 28 42, 32 38
-             C 36 42, 44 42, 44 38" />
-  </g>
+  <!-- Chimney on right side of roof -->
+  <rect x="68" y="18" width="12" height="18" rx="2" fill="url(#houseGradient)"/>
+  
+  <!-- Letter R inside house (centered) -->
+  <text x="50" y="62" 
+        font-family="Arial, sans-serif" 
+        font-size="36" 
+        font-weight="bold" 
+        fill="#0d9488" 
+        text-anchor="middle" 
+        dominant-baseline="middle">R</text>
 </svg>

@@ -29,11 +29,16 @@ export function AdminSidebar() {
     <aside className="w-64 min-h-screen bg-card border-r border-border flex flex-col">
       {/* Logo */}
       <div className="p-6 border-b border-border">
-        <h1 className="text-3xl font-extrabold tracking-tight">
-          <span className="text-primary">Rent</span>
-          <span className="text-foreground">Flow</span>
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">Admin Portal</p>
+        <div className="flex items-center gap-3">
+          <img src="/logo.png" alt="RentFlow" className="w-12 h-12" />
+          <div className="flex flex-col">
+            <h1 className="text-3xl font-extrabold tracking-tight">
+              <span className="text-primary">Rent</span>
+              <span className="text-foreground">Flow</span>
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">Admin Portal</p>
+          </div>
+        </div>
       </div>
 
       {/* Navigation */}

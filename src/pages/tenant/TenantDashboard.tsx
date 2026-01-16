@@ -82,6 +82,7 @@ export default function TenantDashboard() {
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [tenantProfile, setTenantProfile] = useState<{ full_name: string; email: string } | null>(null);
   const [paymentStreak, setPaymentStreak] = useState<number | null>(null);
+  const [remainingBalance, setRemainingBalance] = useState<number | null>(null);
 
   const fetchTenantData = useCallback(async () => {
     try {
@@ -420,27 +421,135 @@ export default function TenantDashboard() {
         }
 
         // Fetch recent payments (limit to 2-3 for dashboard)
+        // Filter out old pending payments (older than 1 hour) - these are likely abandoned
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
         const { data: paymentsData } = await supabase
           .from("payments")
           .select("*")
           .eq("unit_id", unitData.id)
           .order("created_at", { ascending: false })
-          .limit(3);
+          .limit(10); // Fetch more to filter, then limit to 3
 
         if (paymentsData) {
-          setRecentPayments(paymentsData);
+          // Filter out old pending payments
+          const filteredPayments = paymentsData.filter((p) => {
+            // Show all completed/failed payments
+            if (p.status !== "pending") return true;
+            // For pending payments, only show if created within last hour
+            return new Date(p.created_at) > new Date(oneHourAgo);
+          }).slice(0, 3); // Limit to 3 most recent after filtering
           
-          // Calculate total paid this year
+          setRecentPayments(filteredPayments);
+          
+          // Calculate total paid this year (base rent amount only, excluding fees and late fees)
           const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString();
           const { data: yearPayments } = await supabase
             .from("payments")
-            .select("amount")
+            .select("statement_amount, statement_id")
             .eq("unit_id", unitData.id)
             .eq("status", "completed")
-            .gte("paid_at", yearStart);
+            .gte("paid_at", yearStart)
+            .not("statement_id", "is", null);
           
-          if (yearPayments) {
-            setTotalPaid(yearPayments.reduce((sum, p) => sum + Number(p.amount), 0));
+          if (yearPayments && yearPayments.length > 0) {
+            // Get all unique statement IDs to fetch base_rent for each
+            const statementIds = [...new Set(yearPayments.map(p => p.statement_id).filter(Boolean))];
+            
+            // Fetch statements to get base_rent for each
+            const { data: statements } = await supabase
+              .from("statements")
+              .select("id, base_rent, late_fee, additional_fees")
+              .in("id", statementIds);
+            
+            const statementMap = new Map(statements?.map(s => [s.id, s]) || []);
+            
+            // Sum only the base rent portion (excluding late fees, additional fees, and platform fees)
+            // Use proportion calculation: base_rent / statementTotal * statement_amount
+            const totalBasePaid = yearPayments.reduce((sum, p) => {
+              if (p.statement_id && statementMap.has(p.statement_id)) {
+                const statement = statementMap.get(p.statement_id)!;
+                const baseRent = Number(statement.base_rent);
+                const lateFee = Number(statement.late_fee || 0);
+                const additionalFees = Number(statement.additional_fees || 0);
+                const statementTotal = baseRent + lateFee + additionalFees;
+                
+                if (p.statement_amount !== null && p.statement_amount !== undefined && statementTotal > 0) {
+                  // Calculate proportion: base_rent / statementTotal
+                  // Then multiply by statement_amount to get base rent portion paid
+                  const proportion = baseRent / statementTotal;
+                  const baseRentPaid = Number(p.statement_amount) * proportion;
+                  
+                  console.log("[Total Paid This Year] Payment calculation:", {
+                    statement_id: p.statement_id,
+                    statement_amount: p.statement_amount,
+                    base_rent: baseRent,
+                    late_fee: lateFee,
+                    additional_fees: additionalFees,
+                    statementTotal: statementTotal,
+                    proportion: proportion,
+                    baseRentPaid: baseRentPaid
+                  });
+                  
+                  return sum + baseRentPaid;
+                }
+              }
+              return sum;
+            }, 0);
+            const roundedTotal = Math.round(totalBasePaid * 100) / 100;
+            console.log("[Total Paid This Year] Final total:", roundedTotal);
+            setTotalPaid(roundedTotal);
+          } else {
+            setTotalPaid(0);
+          }
+
+          // Calculate remaining balance for current statement after partial payments
+          if (currentStatement && unitData) {
+            // Fetch all completed payments for this statement
+            const { data: statementPayments } = await supabase
+              .from("payments")
+              .select("amount, fee_amount, statement_id, statement_amount, created_at")
+              .eq("statement_id", currentStatement.id)
+              .eq("status", "completed")
+              .order("created_at", { ascending: true }); // Oldest first
+
+            if (statementPayments && statementPayments.length > 0) {
+              const statementTotalDue = Number(currentStatement.total_due);
+              
+              // Sum all statement_amount values (amount applied to statement, excluding platform fees)
+              // Formula: remaining = total_due - sum(statement_amount for all payments)
+              const totalPaidToStatement = statementPayments.reduce((sum, p) => {
+                if (p.statement_amount !== null && p.statement_amount !== undefined) {
+                  const amount = Number(p.statement_amount);
+                  console.log("[Total Rent Due] Payment contribution:", {
+                    payment_id: p.id || 'unknown',
+                    statement_amount: amount,
+                    running_total: sum + amount
+                  });
+                  return sum + amount;
+                } else {
+                  // Fallback for old payments without statement_amount
+                  // For old payments, we can't accurately calculate, so skip them
+                  // This should rarely happen after migration
+                  console.warn("[Total Rent Due] Payment missing statement_amount, skipping:", p);
+                  return sum;
+                }
+              }, 0);
+
+              const remaining = Math.max(0, statementTotalDue - totalPaidToStatement);
+              console.log("[Total Rent Due] Calculation:", {
+                statement_id: currentStatement.id,
+                statement_total_due: statementTotalDue,
+                total_paid_to_statement: totalPaidToStatement,
+                remaining_balance: remaining
+              });
+              setRemainingBalance(remaining);
+            } else {
+              // No payments made yet, remaining balance = total_due
+              console.log("[Total Rent Due] No payments yet, using total_due:", currentStatement.total_due);
+              setRemainingBalance(Number(currentStatement.total_due));
+            }
+          } else {
+            setRemainingBalance(null);
           }
         }
 
@@ -615,7 +724,16 @@ export default function TenantDashboard() {
     if (!unit || !currentStatement) return false;
     if (currentStatement.status === "paid") return false;
     
-    // If first_month_paid is true and we're showing a future month's statement, it's not past due
+    const today = startOfDay(new Date());
+    const [month, year] = currentStatement.period_month.split('/').map(Number);
+    const dueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    
+    // If the due date hasn't arrived yet, it's not past due (regardless of status)
+    if (today < dueDate) {
+      return false;
+    }
+    
+    // If first_month_paid is true, check if we're showing a future month's statement
     if (unit.first_month_paid) {
       const currentMonth = format(new Date(), "MM/yyyy");
       const [statementMonth, statementYear] = currentStatement.period_month.split('/').map(Number);
@@ -627,9 +745,7 @@ export default function TenantDashboard() {
       }
     }
     
-    const today = new Date();
-    const [month, year] = currentStatement.period_month.split('/').map(Number);
-    const dueDate = new Date(year, month - 1, unit.due_day);
+    // Only return true if the due date has passed
     return today > dueDate;
   };
 
@@ -644,9 +760,9 @@ export default function TenantDashboard() {
     if (isPastDue()) return true;
     
     // Calculate due date for the current statement's period
-    const today = new Date();
+    const today = startOfDay(new Date());
     const [month, year] = currentStatement.period_month.split('/');
-    const statementDueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+    const statementDueDate = startOfDay(new Date(parseInt(year), parseInt(month) - 1, unit.due_day));
     
     // Calculate days until due date (can be negative if past due, but we already checked isPastDue)
     const daysUntilDue = differenceInDays(statementDueDate, today);
@@ -691,8 +807,21 @@ export default function TenantDashboard() {
   const daysUntilDue = getDaysUntilDue();
   const nextDueDate = getNextDueDate();
   const pastDue = isPastDue();
-  const rentDue = currentStatement?.total_due || unit?.monthly_rent || 0;
+  // Use remaining balance if available, otherwise fall back to total_due
+  const rentDue = remainingBalance !== null ? remainingBalance : (currentStatement?.total_due || unit?.monthly_rent || 0);
   const canPay = canMakePayment();
+  
+  // Calculate days until payment is available (for button text)
+  const getDaysUntilPaymentAvailable = () => {
+    if (!currentStatement || !unit || currentStatement.status === "paid") return null;
+    if (pastDue) return null; // Can always pay if past due
+    const today = startOfDay(new Date());
+    const [month, year] = currentStatement.period_month.split('/');
+    const statementDueDate = startOfDay(new Date(parseInt(year), parseInt(month) - 1, unit.due_day));
+    const daysUntilDue = differenceInDays(statementDueDate, today);
+    return daysUntilDue > 3 ? daysUntilDue - 3 : null;
+  };
+  const daysUntilPaymentAvailable = getDaysUntilPaymentAvailable();
 
   // Calculate late fee breakdown
   const calculateLateFeeBreakdown = () => {
@@ -839,10 +968,16 @@ export default function TenantDashboard() {
                       setPaymentModalOpen(true);
                     }
                   }}
-                  disabled={!canPay && !unit}
+                  disabled={!canPay || !unit || currentStatement?.status === "paid"}
                 >
-                  {currentStatement?.status === "paid" ? "Paid" : "Pay"}
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  {currentStatement?.status === "paid" 
+                    ? "Paid" 
+                    : !canPay && daysUntilPaymentAvailable !== null
+                    ? `Pay (Available in ${daysUntilPaymentAvailable} days)`
+                    : "Pay"}
+                  {canPay && currentStatement?.status !== "paid" && (
+                    <ExternalLink className="ml-2 h-4 w-4" />
+                  )}
                 </Button>
               </div>
             </div>

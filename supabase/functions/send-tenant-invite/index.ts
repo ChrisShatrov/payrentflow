@@ -171,7 +171,7 @@ serve(async (req) => {
       // You must verify your own domain at https://resend.com/domains
       // For production: Set RESEND_FROM_EMAIL env var to your verified domain email
       // e.g., "RentFlow <noreply@yourdomain.com>"
-      const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") || "RentFlow <onboarding@resend.dev>";
+      const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") || "RentFlow <support@payrentflow.com>";
       const { error: emailError } = await resend.emails.send({
         from: fromEmail,
       to: [email],

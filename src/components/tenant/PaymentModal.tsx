@@ -16,6 +16,7 @@ import { CreditCard, Building2, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { startOfDay } from "date-fns";
 
 interface PaymentModalProps {
   open: boolean;
@@ -57,7 +58,7 @@ export function PaymentModal({
   const [paymentAmount, setPaymentAmount] = useState<string>("");
   const [pastDueStatements, setPastDueStatements] = useState<PastDueStatement[]>([]);
   const [pastDueLateFee, setPastDueLateFee] = useState(0);
-  const [unit, setUnit] = useState<{ due_day: number; late_fee_type: string; late_fee_amount: number; daily_late_fee: number; split_payment_fee: number | null } | null>(null);
+  const [unit, setUnit] = useState<{ due_day: number; late_fee_type: string; late_fee_amount: number; daily_late_fee: number; split_payment_fee: number | null; first_month_paid?: boolean } | null>(null);
   const { toast } = useToast();
 
   // Fetch past due statements and unit info when modal opens and split payment is allowed
@@ -75,10 +76,10 @@ export function PaymentModal({
     if (!statement || !user) return;
 
     try {
-      // Fetch unit info
+      // Fetch unit info including first_month_paid
       const { data: unitData } = await supabase
         .from("units")
-        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, split_payment_fee")
+        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, split_payment_fee, first_month_paid")
         .eq("tenant_id", user.id)
         .maybeSingle();
 
@@ -89,12 +90,12 @@ export function PaymentModal({
       // Fetch past due statements
       const { data: unitDataForStatements } = await supabase
         .from("units")
-        .select("id")
+        .select("id, first_month_paid, due_day")
         .eq("tenant_id", user.id)
         .maybeSingle();
 
-      if (unitDataForStatements) {
-        const { data: pastDue } = await supabase
+      if (unitDataForStatements && unitData) {
+        const { data: allUnpaid } = await supabase
           .from("statements")
           .select("id, total_due, period_month")
           .eq("unit_id", unitDataForStatements.id)
@@ -102,15 +103,31 @@ export function PaymentModal({
           .neq("id", statement.id)
           .order("period_month", { ascending: true });
 
-        if (pastDue) {
+        if (allUnpaid) {
+          // Filter out statements that shouldn't be considered past due
+          const today = startOfDay(new Date());
+          const currentMonth = `${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+          
+          const pastDue = allUnpaid.filter((s) => {
+            // If first_month_paid is true, exclude current month's statement
+            if (unitDataForStatements.first_month_paid && s.period_month === currentMonth) {
+              return false;
+            }
+            
+            // Only include statements where the due date has actually passed
+            const [month, year] = s.period_month.split("/").map(Number);
+            const dueDate = startOfDay(new Date(year, month - 1, unitData.due_day));
+            return today > dueDate;
+          });
+
           setPastDueStatements(pastDue);
 
           // Calculate late fees if past due > 30 days
           if (pastDue.length > 0 && unitData) {
             const oldestStatement = pastDue[0];
             const [oldestMonth, oldestYear] = oldestStatement.period_month.split("/").map(Number);
-            const oldestDueDate = new Date(oldestYear, oldestMonth - 1, unitData.due_day);
-            const today = new Date();
+            const oldestDueDate = startOfDay(new Date(oldestYear, oldestMonth - 1, unitData.due_day));
+            const today = startOfDay(new Date());
             const daysLate = Math.floor((today.getTime() - oldestDueDate.getTime()) / (1000 * 60 * 60 * 24));
 
             if (daysLate > 30) {
@@ -149,7 +166,7 @@ export function PaymentModal({
 
   // Calculate fees dynamically
   const calculateFees = () => {
-    if (!statement) return { paymentMethodFee: 0, serviceCharge: SERVICE_CHARGE, splitFee: 0, total: 0, currentMonthAmount: 0, pastDueAmount: 0, lateFeeAmount: 0 };
+    if (!statement) return { paymentMethodFee: 0, serviceCharge: SERVICE_CHARGE, splitFee: 0, total: 0, currentMonthAmount: 0, pastDueAmount: 0, lateFeeAmount: 0, isFullPayment: false };
 
     let baseAmount = 0;
     let currentMonthAmount = 0;
@@ -162,44 +179,105 @@ export function PaymentModal({
       pastDueAmount = pastDueStatements.reduce((sum, s) => sum + Number(s.total_due || 0), 0);
       lateFeeAmount = pastDueLateFee;
       baseAmount = currentMonthAmount + pastDueAmount + lateFeeAmount;
+      
+      // Calculate full amount (current month's full rent + past due + late fees)
+      const fullCurrentMonthAmount = Number(statement.base_rent);
+      const fullAmount = fullCurrentMonthAmount + pastDueAmount + lateFeeAmount;
+      
+      // Round to 2 decimal places for comparison to avoid floating point precision issues
+      const roundedCurrentAmount = Math.round(currentMonthAmount * 100) / 100;
+      const roundedFullAmount = Math.round(fullCurrentMonthAmount * 100) / 100;
+      const roundedBaseAmount = Math.round(baseAmount * 100) / 100;
+      const roundedFullTotal = Math.round(fullAmount * 100) / 100;
+      
+      // Consider it full payment if payment is >= (full amount - $0.01)
+      // This allows $1249.99 to be considered full when full amount is $1250.00
+      // but $1249.98 will be considered partial
+      const isFullPayment = roundedCurrentAmount >= (roundedFullAmount - 0.01) && 
+                           roundedBaseAmount >= (roundedFullTotal - 0.01);
+      
+      // Only include split payment fee if NOT paying in full
+      const splitFee = isFullPayment ? 0 : (splitPaymentFee || unit?.split_payment_fee || DEFAULT_SPLIT_PAYMENT_FEE);
+      
+      let paymentMethodFee = 0;
+      if (paymentMethod === "card") {
+        paymentMethodFee = baseAmount * (CARD_FEE_PERCENT / 100);
+      } else {
+        paymentMethodFee = ACH_FEE_FLAT;
+      }
+      
+      const total = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
+      
+      return {
+        paymentMethodFee: Math.round(paymentMethodFee * 100) / 100,
+        serviceCharge: SERVICE_CHARGE,
+        splitFee,
+        total: Math.round(total * 100) / 100,
+        currentMonthAmount,
+        pastDueAmount,
+        lateFeeAmount,
+        isFullPayment,
+      };
     } else {
       // Standard payment: pay full statement amount
       baseAmount = Number(statement.total_due);
+      
+      let paymentMethodFee = 0;
+      if (paymentMethod === "card") {
+        paymentMethodFee = baseAmount * (CARD_FEE_PERCENT / 100);
+      } else {
+        paymentMethodFee = ACH_FEE_FLAT;
+      }
+      
+      const total = baseAmount + paymentMethodFee + SERVICE_CHARGE;
+      
+      return {
+        paymentMethodFee: Math.round(paymentMethodFee * 100) / 100,
+        serviceCharge: SERVICE_CHARGE,
+        splitFee: 0,
+        total: Math.round(total * 100) / 100,
+        currentMonthAmount: baseAmount,
+        pastDueAmount: 0,
+        lateFeeAmount: 0,
+        isFullPayment: true,
+      };
     }
-
-    let paymentMethodFee = 0;
-
-    if (paymentMethod === "card") {
-      paymentMethodFee = baseAmount * (CARD_FEE_PERCENT / 100);
-    } else {
-      paymentMethodFee = ACH_FEE_FLAT;
-    }
-
-    const splitFee = allowSplitPayment ? (splitPaymentFee || unit?.split_payment_fee || DEFAULT_SPLIT_PAYMENT_FEE) : 0;
-    const total = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
-
-    return {
-      paymentMethodFee: Math.round(paymentMethodFee * 100) / 100,
-      serviceCharge: SERVICE_CHARGE,
-      splitFee,
-      total: Math.round(total * 100) / 100,
-      currentMonthAmount,
-      pastDueAmount,
-      lateFeeAmount,
-    };
   };
 
   const fees = calculateFees();
 
   const handlePayment = async () => {
-    if (!statement) return;
+    if (!statement || loading) return; // Prevent multiple clicks
+
+    // Check if there's already a pending payment for this statement
+    try {
+      const { data: existingPayments } = await supabase
+        .from("payments")
+        .select("id, status")
+        .eq("statement_id", statement.id)
+        .in("status", ["pending", "processing"])
+        .limit(1);
+
+      if (existingPayments && existingPayments.length > 0) {
+        toast({
+          title: "Payment Already in Progress",
+          description: "You already have a pending payment for this statement. Please wait for it to complete or cancel it first.",
+          variant: "destructive",
+        });
+        return;
+      }
+    } catch (error) {
+      console.error("Error checking existing payments:", error);
+      // Continue anyway - better to try than block
+    }
 
     // Validate payment amount for split payments
     if (allowSplitPayment) {
       const minPayment = Number(statement.base_rent) / 2;
       const paymentAmt = Number(paymentAmount);
       const pastDueBalance = pastDueStatements.reduce((sum, s) => sum + Number(s.total_due || 0), 0);
-      const maxPayment = Number(statement.base_rent) + pastDueBalance;
+      const lateFeeBalance = pastDueLateFee;
+      const maxPayment = Number(statement.base_rent) + pastDueBalance + lateFeeBalance;
 
       if (paymentAmt < minPayment) {
         toast({
@@ -233,6 +311,7 @@ export function PaymentModal({
       if (data?.error) throw new Error(data.error);
 
       if (data?.url) {
+        // Prevent multiple redirects
         window.location.href = data.url;
       }
     } catch (error) {
@@ -315,14 +394,21 @@ export function PaymentModal({
                 type="number"
                 step="0.01"
                 min={Number(statement.base_rent) / 2}
-                max={Number(statement.base_rent) + pastDueStatements.reduce((sum, s) => sum + Number(s.total_due || 0), 0)}
+                max={Number(statement.base_rent) + pastDueStatements.reduce((sum, s) => sum + Number(s.total_due || 0), 0) + pastDueLateFee}
                 value={paymentAmount}
                 onChange={(e) => setPaymentAmount(e.target.value)}
                 placeholder={`Minimum: $${(Number(statement.base_rent) / 2).toFixed(2)}`}
               />
-              <p className="text-xs text-muted-foreground">
-                Minimum: ${(Number(statement.base_rent) / 2).toFixed(2)} (half of current month's rent)
-              </p>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">
+                  Minimum: ${(Number(statement.base_rent) / 2).toFixed(2)} (half of current month's rent)
+                </p>
+                {fees.isFullPayment && (
+                  <p className="text-xs text-green-600 dark:text-green-400 font-medium">
+                    ✓ Paying in full - Split Payment Fee waived
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
@@ -397,7 +483,7 @@ export function PaymentModal({
                 <span>${fees.serviceCharge.toFixed(2)}</span>
               </div>
 
-              {allowSplitPayment && (
+              {allowSplitPayment && fees.splitFee > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Split Payment Fee</span>
                   <span>${fees.splitFee.toFixed(2)}</span>

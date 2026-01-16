@@ -78,15 +78,16 @@ export default function AdminPayments() {
 
       const unitIds = unitsData.map((u) => u.id);
 
-      // Get count of payments
+      // Get count of completed payments only (landlords should only see successful payments)
       const { count } = await supabase
         .from("payments")
         .select("*", { count: "exact", head: true })
-        .in("unit_id", unitIds);
+        .in("unit_id", unitIds)
+        .eq("status", "completed");
 
       setTotalCount(count || 0);
 
-      // Then fetch the paginated data
+      // Then fetch the paginated data - only completed payments
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
@@ -115,6 +116,7 @@ export default function AdminPayments() {
           )
         `)
         .in("unit_id", unitIds)
+        .eq("status", "completed")
         .order("created_at", { ascending: false })
         .range(from, to);
 

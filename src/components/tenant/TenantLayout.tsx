@@ -32,11 +32,15 @@ export function TenantLayout({ children }: TenantLayoutProps) {
       <header className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           {/* Logo */}
-          <Link to="/tenant" className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
-              R
+          <Link to="/tenant" className="flex items-center gap-3">
+            <img src="/logo.png" alt="RentFlow" className="w-12 h-12" />
+            <div className="flex flex-col">
+              <h1 className="text-3xl font-extrabold tracking-tight">
+                <span className="text-primary">Rent</span>
+                <span className="text-foreground">Flow</span>
+              </h1>
+              <p className="text-sm text-muted-foreground mt-0.5">Tenant Portal</p>
             </div>
-            <span className="text-lg font-semibold text-foreground">RentFlow</span>
           </Link>
 
           {/* Desktop Nav */}

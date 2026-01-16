@@ -111,38 +111,57 @@ export default function TenantPayments() {
         setUnitId(unitData.id);
 
         // Fetch all payments for this unit (no limit - show all, including pending)
+        // But filter out old pending payments (older than 1 hour) - these are likely abandoned
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
         const { data: paymentsData, error: paymentsError } = await supabase
           .from("payments")
           .select("*")
           .eq("unit_id", unitData.id)
           .order("created_at", { ascending: false });
+        
+        // Filter out old pending payments (user opened Stripe but didn't complete)
+        const filteredPayments = paymentsData?.filter((p) => {
+          // Show all completed/failed payments
+          if (p.status !== "pending") return true;
+          // For pending payments, only show if created within last hour
+          return new Date(p.created_at) > new Date(oneHourAgo);
+        }) || [];
 
         if (paymentsError) {
           console.error("Error fetching payments:", paymentsError);
           setPayments([]);
         } else {
-          console.log("Fetched payments for unit:", unitData.id, paymentsData);
-          setPayments(paymentsData || []);
+          console.log("Fetched payments for unit:", unitData.id, filteredPayments);
+          setPayments(filteredPayments);
           
           // Auto-sync pending card payments (they should complete immediately)
-          // Do this asynchronously to avoid blocking the UI
-          if (paymentsData && paymentsData.length > 0) {
-            const pendingCardPayments = paymentsData.filter(
+          // Only sync if we haven't already synced recently (prevent duplicate syncs)
+          if (filteredPayments && filteredPayments.length > 0) {
+            const pendingCardPayments = filteredPayments.filter(
               p => p.status === "pending" && p.payment_method === "Card"
             );
             
-            // Sync the most recent pending card payment (fire and forget)
+            // Sync the most recent pending card payment, but only once per payment
+            // Use sessionStorage to track which payments we've already synced
             if (pendingCardPayments.length > 0) {
               const mostRecent = pendingCardPayments[0];
-              console.log("Auto-syncing pending card payment:", mostRecent.id);
-              syncPaymentStatus(mostRecent.id).then((synced) => {
-                if (synced) {
-                  // Refresh data after successful sync
-                  setTimeout(() => {
-                    fetchData();
-                  }, 1000);
-                }
-              }).catch(console.error);
+              const lastSyncedKey = `synced_${mostRecent.id}`;
+              const lastSynced = sessionStorage.getItem(lastSyncedKey);
+              const now = Date.now();
+              
+              // Only sync if we haven't synced this payment in the last 5 seconds
+              if (!lastSynced || (now - parseInt(lastSynced)) > 5000) {
+                console.log("Auto-syncing pending card payment:", mostRecent.id);
+                sessionStorage.setItem(lastSyncedKey, now.toString());
+                syncPaymentStatus(mostRecent.id).then((synced) => {
+                  if (synced) {
+                    // Refresh data after successful sync
+                    setTimeout(() => {
+                      fetchData();
+                    }, 1000);
+                  }
+                }).catch(console.error);
+              }
             }
           }
         }
@@ -160,13 +179,24 @@ export default function TenantPayments() {
   useEffect(() => {
     if (user) {
       fetchData();
-      // Refresh payments every 5 seconds to catch new payments
-      const interval = setInterval(() => {
-        fetchData();
-      }, 5000);
-      return () => clearInterval(interval);
     }
   }, [user, fetchData]);
+
+  // Separate effect for polling - only when there are pending payments
+  useEffect(() => {
+    const hasPending = payments.some(p => p.status === "pending");
+    
+    if (!hasPending || !user) {
+      return; // Don't poll if no pending payments
+    }
+    
+    // Poll every 15 seconds for pending payments (reduced frequency to avoid constant refreshing)
+    const interval = setInterval(() => {
+      fetchData();
+    }, 15000);
+    
+    return () => clearInterval(interval);
+  }, [payments, user, fetchData]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {

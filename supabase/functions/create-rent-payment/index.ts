@@ -65,6 +65,11 @@ serve(async (req) => {
           tenant_id,
           allow_split_payment,
           split_payment_fee,
+          first_month_paid,
+          due_day,
+          late_fee_type,
+          late_fee_amount,
+          daily_late_fee,
           properties!inner (
             landlord_id
           )
@@ -135,6 +140,7 @@ serve(async (req) => {
     // Handle split payment logic if enabled
     let baseAmount = 0;
     let pastDueLateFee = 0;
+    let isFullPayment = false; // Track if this is a full payment (for split fee waiver)
     
     if (unit.allow_split_payment) {
       logStep("Split payment enabled, calculating split payment amount");
@@ -144,7 +150,7 @@ serve(async (req) => {
       const minPayment = currentRent / 2;
       
       // Fetch all unpaid/overdue statements for this unit (excluding current statement)
-      const { data: pastDueStatements, error: pastDueError } = await supabaseClient
+      const { data: allUnpaidStatements, error: pastDueError } = await supabaseClient
         .from("statements")
         .select("*")
         .eq("unit_id", unit.id)
@@ -156,8 +162,37 @@ serve(async (req) => {
         logStep("Warning: Could not fetch past due statements", { error: pastDueError.message });
       }
       
+      // Filter out statements that shouldn't be considered past due
+      // (same logic as frontend PaymentModal)
+      const today = new Date();
+      const currentMonth = `${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+      
+      const pastDueStatements = (allUnpaidStatements || []).filter((s) => {
+        // If first_month_paid is true, exclude current month's statement
+        if (unit.first_month_paid && s.period_month === currentMonth) {
+          return false;
+        }
+        
+        // Only include statements where the due date has actually passed
+        const [month, year] = s.period_month.split("/").map(Number);
+        const dueDate = new Date(year, month - 1, unit.due_day);
+        // Set to start of day for accurate comparison
+        dueDate.setHours(0, 0, 0, 0);
+        const todayStart = new Date(today);
+        todayStart.setHours(0, 0, 0, 0);
+        
+        return todayStart > dueDate;
+      });
+      
+      logStep("Filtered past due statements", {
+        totalUnpaid: allUnpaidStatements?.length || 0,
+        actualPastDue: pastDueStatements.length,
+        firstMonthPaid: unit.first_month_paid,
+        currentMonth
+      });
+      
       // Calculate past due balance
-      const pastDueBalance = (pastDueStatements || []).reduce((sum, s) => sum + Number(s.total_due || 0), 0);
+      const pastDueBalance = pastDueStatements.reduce((sum, s) => sum + Number(s.total_due || 0), 0);
       
       // Determine payment amount
       let paymentAmount = payment_amount ? Number(payment_amount) : minPayment;
@@ -206,13 +241,27 @@ serve(async (req) => {
       // Calculate total base amount: payment amount + past due + late fees
       baseAmount = Math.round((paymentAmount + pastDueBalance + pastDueLateFee) * 100);
       
+      // Check if user is paying the full amount (same logic as frontend)
+      const fullCurrentMonthAmount = currentRent;
+      const fullAmount = fullCurrentMonthAmount + pastDueBalance + pastDueLateFee;
+      const roundedPaymentAmount = Math.round(paymentAmount * 100) / 100;
+      const roundedFullAmount = Math.round(fullCurrentMonthAmount * 100) / 100;
+      const roundedBaseAmount = baseAmount / 100;
+      const roundedFullTotal = Math.round(fullAmount * 100) / 100;
+      
+      // Consider it full payment if payment is >= (full amount - $0.01)
+      isFullPayment = roundedPaymentAmount >= (roundedFullAmount - 0.01) && 
+                     roundedBaseAmount >= (roundedFullTotal - 0.01);
+      
       logStep("Split payment calculated", {
         currentRent,
         minPayment,
         paymentAmount,
         pastDueBalance,
         pastDueLateFee,
-        totalBaseAmount: baseAmount / 100
+        totalBaseAmount: baseAmount / 100,
+        isFullPayment,
+        fullAmount
       });
     } else {
       // Standard payment: pay full statement amount
@@ -231,10 +280,13 @@ serve(async (req) => {
       paymentMethodFee = ACH_FEE_FLAT;
     }
 
-    // Add split payment fee if enabled (use unit's fee or default to $30)
-    if (unit.allow_split_payment) {
+    // Add split payment fee if enabled and NOT paying in full (use unit's fee or default to $30)
+    if (unit.allow_split_payment && !isFullPayment) {
       const unitSplitFee = unit.split_payment_fee ? Math.round(Number(unit.split_payment_fee) * 100) : SPLIT_PAYMENT_FEE;
       splitFee = unitSplitFee;
+      logStep("Split payment fee applied", { splitFee: splitFee / 100 });
+    } else if (unit.allow_split_payment && isFullPayment) {
+      logStep("Split payment fee waived - paying in full");
     }
 
     // Total amount tenant pays = baseAmount (rent + late fees) + all platform fees
@@ -410,11 +462,24 @@ serve(async (req) => {
       throw new Error("Unit ID not found in statement");
     }
     
+    // Calculate statement_amount: how much of this payment goes to the current statement
+    // For split payments: this is the paymentAmount (portion towards current month)
+    // For full payments: this is baseAmount (total - fees, which equals statement total)
+    let statementAmount = 0;
+    if (unit.allow_split_payment && payment_amount) {
+      // Split payment: statement_amount is the payment_amount (portion towards current month)
+      statementAmount = Number(payment_amount);
+    } else {
+      // Full payment: statement_amount is the baseAmount (total rent amount for this statement)
+      statementAmount = baseAmount / 100;
+    }
+    
     const paymentInsertData = {
       unit_id: unitId,
       statement_id: statement_id,
       amount: totalAmount / 100,
       fee_amount: applicationFee / 100,
+      statement_amount: statementAmount, // Amount applied to this statement
       payment_method: paymentMethodDb, // Must be exactly 'Card' or 'ACH'
       status: "pending",
       stripe_payment_id: session.id,
@@ -425,9 +490,12 @@ serve(async (req) => {
       statement_id: statement_id,
       amount: totalAmount / 100,
       fee_amount: applicationFee / 100,
+      statement_amount: statementAmount, // Amount applied to statement (for split payments: payment_amount, for full: baseAmount)
       payment_method: paymentMethodDb, // Log the exact value being inserted
       status: "pending",
       stripe_payment_id: session.id,
+      is_split_payment: unit.allow_split_payment && payment_amount ? true : false,
+      payment_amount: payment_amount || null,
     });
     
     // Verify unit_id exists in database before inserting
