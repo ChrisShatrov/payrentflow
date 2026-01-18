@@ -532,6 +532,18 @@ export default function Auth() {
               </div>
             )}
 
+            {isSignUp && (
+              <p className="text-center text-sm text-muted-foreground mt-4">
+                Have any questions before signing up? Email us at{" "}
+                <a 
+                  href="mailto:support@payrentflow.com" 
+                  className="text-primary hover:underline font-medium"
+                >
+                  support@payrentflow.com
+                </a>
+              </p>
+            )}
+
             <Button
               type="submit"
               disabled={loading}
@@ -544,7 +556,7 @@ export default function Auth() {
             </Button>
           </form>
 
-          <p className="text-center text-muted-foreground mt-6">
+          <p className="text-center text-muted-foreground mt-6 hidden">
             {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
             <Link
               to={isSignUp ? "/auth" : "/signup"}

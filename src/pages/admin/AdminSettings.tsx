@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { User, Mail, Lock, Loader2, Check } from "lucide-react";
+import { User, Mail, Lock, Loader2, Check, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { DocuSignConnectDialog } from "@/components/admin/DocuSignConnectDialog";
 
 const profileSchema = z.object({
   full_name: z.string().min(1, "Name is required").max(100, "Name must be less than 100 characters"),
@@ -36,6 +37,19 @@ export default function AdminSettings() {
     if (user) {
       fetchProfile();
       setEmail(user.email || "");
+    }
+    
+    // Check for DocuSign connection status in URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("docusign_connected") === "true") {
+      toast.success("DocuSign connected successfully!");
+      // Clean up URL
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (urlParams.get("docusign_error")) {
+      const error = urlParams.get("docusign_error");
+      toast.error(`DocuSign connection failed: ${error}`);
+      // Clean up URL
+      window.history.replaceState({}, "", window.location.pathname);
     }
   }, [user]);
 
@@ -264,6 +278,26 @@ export default function AdminSettings() {
                   Check your email inbox for the password reset link.
                 </p>
               )}
+            </CardContent>
+          </Card>
+
+          {/* DocuSign Integration */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Link2 className="h-5 w-5 text-primary" />
+                DocuSign Integration
+              </CardTitle>
+              <CardDescription>
+                Connect your DocuSign account to enable electronic signatures for lease agreements
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DocuSignConnectDialog />
+              <p className="text-sm text-muted-foreground mt-4">
+                You must connect your DocuSign account through OAuth to send leases for signature. 
+                Manual credentials cannot be used for security reasons.
+              </p>
             </CardContent>
           </Card>
         </div>

@@ -136,13 +136,13 @@ export function SEOLandingPage({
         {/* Header */}
         <header className="fixed top-0 left-0 right-0 z-50 bg-card/80 backdrop-blur-md border-b border-border">
           <div className="container flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
+            <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
               <img src="/logo.png" alt="RentFlow" className="w-12 h-12" />
               <h1 className="text-3xl font-extrabold tracking-tight">
                 <span className="text-primary">Rent</span>
                 <span className="text-foreground">Flow</span>
               </h1>
-            </div>
+            </Link>
             <nav className="hidden md:flex items-center gap-8">
               <a href="#features" className="text-muted-foreground hover:text-foreground transition-colors">Features</a>
               <a href="#how-it-works" className="text-muted-foreground hover:text-foreground transition-colors">How It Works</a>
@@ -370,14 +370,14 @@ export function SEOLandingPage({
         <footer className="py-12 px-4 border-t border-border bg-card">
           <div className="container max-w-6xl">
             <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-              <div className="flex items-center gap-2">
+              <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
                 <img src="/logo.png" alt="RentFlow" className="w-10 h-10" />
                 <span className="font-semibold text-foreground">RentFlow</span>
-              </div>
+              </Link>
               <div className="flex items-center gap-6 text-sm text-muted-foreground">
-                <a href="#" className="hover:text-foreground transition-colors">Privacy</a>
-                <a href="#" className="hover:text-foreground transition-colors">Terms</a>
-                <a href="#" className="hover:text-foreground transition-colors">Support</a>
+                <Link to="/privacy" className="hover:text-foreground transition-colors">Privacy</Link>
+                <Link to="/terms" className="hover:text-foreground transition-colors">Terms</Link>
+                <Link to="/contact" className="hover:text-foreground transition-colors">Support</Link>
               </div>
             </div>
           </div>

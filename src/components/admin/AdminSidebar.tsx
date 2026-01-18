@@ -1,5 +1,5 @@
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Building2, Users, FileText, LogOut, Settings, CreditCard } from "lucide-react";
+import { LayoutDashboard, Building2, Users, FileText, LogOut, Settings, CreditCard, FileSignature } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 
@@ -7,6 +7,8 @@ const navItems = [
   { title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { title: "Properties", url: "/admin/properties", icon: Building2 },
   { title: "Tenants", url: "/admin/tenants", icon: Users },
+  { title: "Lease Templates", url: "/admin/lease-templates", icon: FileSignature },
+  { title: "Leases", url: "/admin/leases", icon: FileText },
   { title: "Payments", url: "/admin/payments", icon: CreditCard },
   { title: "Statements", url: "/admin/statements", icon: FileText },
   { title: "Settings", url: "/admin/settings", icon: Settings },

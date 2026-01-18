@@ -19,12 +19,17 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
 const AdminProperties = lazy(() => import("./pages/admin/AdminProperties"));
 const AdminTenants = lazy(() => import("./pages/admin/AdminTenants"));
+const AdminLeaseTemplates = lazy(() => import("./pages/admin/AdminLeaseTemplates"));
+const AdminLeases = lazy(() => import("./pages/admin/AdminLeases"));
 const AdminPayments = lazy(() => import("./pages/admin/AdminPayments"));
 const AdminStatements = lazy(() => import("./pages/admin/AdminStatements"));
 const AdminSettings = lazy(() => import("./pages/admin/AdminSettings"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
 const TenantStatements = lazy(() => import("./pages/tenant/TenantStatements"));
 const TenantPayments = lazy(() => import("./pages/tenant/TenantPayments"));
+const TenantLeases = lazy(() => import("./pages/tenant/TenantLeases"));
+const Privacy = lazy(() => import("./pages/Privacy"));
+const Terms = lazy(() => import("./pages/Terms"));
 
 // Resources & Blog
 const Resources = lazy(() => import("./pages/Resources"));
@@ -215,6 +220,10 @@ const AppRoutes = () => {
         <Route path="/signup" element={<Auth />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         
+        {/* Legal Pages */}
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
+        
         {/* SEO Landing Pages - Tenant Intent (High Volume) */}
         <Route path="/pay-rent-online" element={<PayRentOnline />} />
         <Route path="/rent-payment-app" element={<RentPaymentApp />} />
@@ -274,6 +283,16 @@ const AppRoutes = () => {
             <AdminSettings />
           </ProtectedRoute>
         } />
+        <Route path="/admin/lease-templates" element={
+          <ProtectedRoute allowedRoles={["admin"]}>
+            <AdminLeaseTemplates />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/leases" element={
+          <ProtectedRoute allowedRoles={["admin"]}>
+            <AdminLeases />
+          </ProtectedRoute>
+        } />
         
         {/* Tenant Routes - Only accessible by tenants */}
         <Route path="/tenant" element={
@@ -289,6 +308,21 @@ const AppRoutes = () => {
         <Route path="/tenant/statements" element={
           <ProtectedRoute allowedRoles={["tenant"]}>
             <TenantStatements />
+          </ProtectedRoute>
+        } />
+        <Route path="/tenant/leases" element={
+          <ProtectedRoute allowedRoles={["tenant"]}>
+            <TenantLeases />
+          </ProtectedRoute>
+        } />
+        <Route path="/tenant/leases/:id" element={
+          <ProtectedRoute allowedRoles={["tenant"]}>
+            <TenantLeases />
+          </ProtectedRoute>
+        } />
+        <Route path="/tenant/leases/:id/signed" element={
+          <ProtectedRoute allowedRoles={["tenant"]}>
+            <TenantLeases />
           </ProtectedRoute>
         } />
         
