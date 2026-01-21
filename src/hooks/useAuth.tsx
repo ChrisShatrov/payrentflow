@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, useRef, createContext, useContext, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -21,6 +21,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<UserRole>(null);
   const [loading, setLoading] = useState(true);
+  const isSigningOutRef = useRef(false);
+
+  // Comprehensive function to clear all auth data
+  // preserveJustSignedOut: if true, keeps the just_signed_out flag (for manual sign out)
+  // skipSupabaseSignOut: if true, skips calling supabase.auth.signOut() (to prevent double sign out)
+  const clearAllAuthData = async (preserveJustSignedOut = false, skipSupabaseSignOut = false) => {
+    // Prevent double clearing
+    if (isSigningOutRef.current && !skipSupabaseSignOut) {
+      console.log('[useAuth] Already signing out, skipping duplicate clear');
+      return;
+    }
+    
+    if (!skipSupabaseSignOut) {
+      isSigningOutRef.current = true;
+    }
+    
+    console.log('[useAuth] Clearing all auth data', { preserveJustSignedOut, skipSupabaseSignOut });
+    
+    // Save just_signed_out flag if we need to preserve it
+    const justSignedOutValue = preserveJustSignedOut ? localStorage.getItem('just_signed_out') : null;
+    
+    // Clear all Supabase keys (not just auth-token)
+    const allKeys = Object.keys(localStorage);
+    allKeys.forEach(key => {
+      if (key.startsWith('sb-')) {
+        localStorage.removeItem(key);
+      }
+    });
+    
+    // Clear activity tracking
+    localStorage.removeItem('last_activity_timestamp');
+    
+    // Only remove just_signed_out if we're not preserving it
+    if (!preserveJustSignedOut) {
+      localStorage.removeItem('just_signed_out');
+    } else if (justSignedOutValue) {
+      // Restore the flag if we preserved it
+      localStorage.setItem('just_signed_out', justSignedOutValue);
+    }
+    
+    // Sign out from Supabase (unless we're skipping it to prevent double sign out)
+    if (!skipSupabaseSignOut) {
+      try {
+        await supabase.auth.signOut();
+      } catch (error) {
+        console.error('[useAuth] Error signing out:', error);
+      }
+    }
+    
+    // Clear state
+    setSession(null);
+    setUser(null);
+    setRole(null);
+    setLoading(false);
+    
+    if (!skipSupabaseSignOut) {
+      // Reset flag after a short delay to allow the SIGNED_OUT event to process
+      setTimeout(() => {
+        isSigningOutRef.current = false;
+      }, 1000);
+    }
+  };
 
   const fetchUserRole = async (userId: string) => {
     try {
@@ -127,32 +189,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         
-        // If session is expired, clear it
+        // If session is expired, clear it (not a manual sign out, so don't preserve flag)
         if (session && session.expires_at && session.expires_at < Date.now() / 1000) {
           console.log('[useAuth] Session expired in auth state change, clearing');
-          const supabaseKeys = Object.keys(localStorage).filter(key => 
-            key.startsWith('sb-') && key.includes('auth-token')
-          );
-          supabaseKeys.forEach(key => localStorage.removeItem(key));
-          await supabase.auth.signOut();
-          setSession(null);
-          setUser(null);
-          setRole(null);
-          setLoading(false);
+          await clearAllAuthData(false);
           return;
         }
         
-        // If signed out event, clear everything
+        // If signed out event, check if this is a manual sign out
         if (event === 'SIGNED_OUT') {
           console.log('[useAuth] Signed out event, clearing state');
-          const supabaseKeys = Object.keys(localStorage).filter(key => 
-            key.startsWith('sb-') && key.includes('auth-token')
-          );
-          supabaseKeys.forEach(key => localStorage.removeItem(key));
-          setSession(null);
-          setUser(null);
-          setRole(null);
-          setLoading(false);
+          // Check if this is a manual sign out (preserve the flag)
+          const justSignedOut = localStorage.getItem('just_signed_out');
+          // Skip supabase sign out since it already happened (this event is the result of it)
+          await clearAllAuthData(!!justSignedOut, true);
           return;
         }
         
@@ -169,7 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     );
 
-    // THEN check for existing session
+    // THEN check for existing session with comprehensive stale session validation
     supabase.auth.getSession().then(async ({ data: { session }, error }) => {
       console.log('[useAuth] Initial session check:', session?.user?.id, 'error:', error);
       
@@ -177,70 +227,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const justSignedOut = localStorage.getItem('just_signed_out');
       if (justSignedOut) {
         console.log('[useAuth] Just signed out, ignoring restored session');
-        localStorage.removeItem('just_signed_out');
-        // Clear all Supabase session data
-        const supabaseKeys = Object.keys(localStorage).filter(key => 
-          key.startsWith('sb-') && key.includes('auth-token')
-        );
-        supabaseKeys.forEach(key => localStorage.removeItem(key));
-        setSession(null);
-        setUser(null);
-        setRole(null);
-        setLoading(false);
+        await clearAllAuthData();
         return;
+      }
+      
+      // Check last activity timestamp - if older than 10 minutes, clear everything
+      const lastActivity = localStorage.getItem('last_activity_timestamp');
+      if (lastActivity) {
+        const lastActivityTime = parseInt(lastActivity, 10);
+        const timeSinceActivity = Date.now() - lastActivityTime;
+        const TEN_MINUTES = 10 * 60 * 1000;
+        
+        if (timeSinceActivity >= TEN_MINUTES) {
+          console.log('[useAuth] Last activity was more than 10 minutes ago, clearing session');
+          await clearAllAuthData();
+          return;
+        }
       }
       
       // If there's an error or the session is invalid, clear it
       if (error || !session) {
         console.log('[useAuth] No valid session found, clearing state');
-        // Clear any stale Supabase session data
-        const supabaseKeys = Object.keys(localStorage).filter(key => 
-          key.startsWith('sb-') && key.includes('auth-token')
-        );
-        supabaseKeys.forEach(key => localStorage.removeItem(key));
-        setSession(null);
-        setUser(null);
-        setRole(null);
-        setLoading(false);
+        await clearAllAuthData();
         return;
       }
       
-      // Validate session is not expired - try to refresh first
-      if (session.expires_at && session.expires_at < Date.now() / 1000) {
-        console.log('[useAuth] Session expired, attempting refresh');
-        try {
-          // Try to refresh the session
-          const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-          if (refreshError || !refreshData.session) {
-            console.log('[useAuth] Session refresh failed, clearing state');
-            // Clear expired session
-            const supabaseKeys = Object.keys(localStorage).filter(key => 
-              key.startsWith('sb-') && key.includes('auth-token')
-            );
-            supabaseKeys.forEach(key => localStorage.removeItem(key));
-            await supabase.auth.signOut();
-            setSession(null);
-            setUser(null);
-            setRole(null);
-            setLoading(false);
+      // Validate session age and expiration
+      const now = Date.now() / 1000; // Convert to seconds
+      const THREE_DAYS_SECONDS = 3 * 24 * 60 * 60;
+      
+      if (session.expires_at) {
+        const sessionAge = now - session.expires_at;
+        
+        // If session is more than 3 days old, don't try to refresh - just clear it
+        if (sessionAge > THREE_DAYS_SECONDS) {
+          console.log('[useAuth] Session is more than 3 days old, clearing');
+          await clearAllAuthData();
+          return;
+        }
+        
+        // If session is expired (but less than 3 days), try to refresh once
+        if (session.expires_at < now) {
+          console.log('[useAuth] Session expired, attempting refresh');
+          try {
+            const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError || !refreshData.session) {
+              console.log('[useAuth] Session refresh failed, clearing state');
+              await clearAllAuthData();
+              return;
+            }
+            // Use refreshed session
+            session = refreshData.session;
+            console.log('[useAuth] Session refreshed successfully');
+          } catch (error) {
+            console.error('[useAuth] Error refreshing session:', error);
+            await clearAllAuthData();
             return;
           }
-          // Use refreshed session
-          session = refreshData.session;
-          console.log('[useAuth] Session refreshed successfully');
-        } catch (error) {
-          console.error('[useAuth] Error refreshing session:', error);
-          // Clear expired session on error
-          const supabaseKeys = Object.keys(localStorage).filter(key => 
-            key.startsWith('sb-') && key.includes('auth-token')
-          );
-          supabaseKeys.forEach(key => localStorage.removeItem(key));
-          await supabase.auth.signOut();
-          setSession(null);
-          setUser(null);
-          setRole(null);
-          setLoading(false);
-          return;
         }
       }
       
@@ -288,26 +331,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     // Set flag with timestamp to prevent redirect loops
+    // This MUST be set before clearing auth data
     localStorage.setItem('just_signed_out', Date.now().toString());
     
-    // Clear inactivity tracking
-    localStorage.removeItem('last_activity_timestamp');
-    
-    // Clear Supabase session from localStorage directly
-    // Supabase stores session data with keys like 'sb-<project-ref>-auth-token'
-    const supabaseKeys = Object.keys(localStorage).filter(key => 
-      key.startsWith('sb-') && key.includes('auth-token')
-    );
-    supabaseKeys.forEach(key => localStorage.removeItem(key));
-    
-    // Sign out from Supabase
-    await supabase.auth.signOut();
-    
-    // Clear local state
-    setUser(null);
-    setSession(null);
-    setRole(null);
-    setLoading(false);
+    // Use comprehensive cleanup function, but preserve the just_signed_out flag
+    await clearAllAuthData(true);
   };
 
   return (

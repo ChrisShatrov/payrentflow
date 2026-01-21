@@ -64,6 +64,15 @@ export default function Auth() {
 
   // Check if user needs Stripe onboarding after signup
   useEffect(() => {
+    // CRITICAL: Check if we just signed out FIRST - before anything else
+    const justSignedOut = localStorage.getItem('just_signed_out');
+    if (justSignedOut) {
+      console.log("[Auth] Just signed out, preventing all redirects");
+      // Don't remove the flag here - let it persist to prevent redirect loops
+      // The flag will be cleared when user successfully logs in again
+      return;
+    }
+    
     // Wait for auth to finish loading before redirecting
     if (authLoading) return;
     
@@ -72,11 +81,8 @@ export default function Auth() {
       return;
     }
     
-    // Don't redirect if we just signed out
-    const justSignedOut = localStorage.getItem('just_signed_out');
-    if (justSignedOut) {
-      localStorage.removeItem('just_signed_out');
-      // Don't redirect - let user stay on auth page
+    // If no user, don't try to redirect
+    if (!user) {
       return;
     }
     
@@ -91,57 +97,80 @@ export default function Auth() {
       return;
     }
     
-    // If user is logged in, redirect them (even if role is null, we'll handle it in ProtectedRoute)
-    if (user) {
+    // If user is logged in AND we didn't just sign out, redirect them IMMEDIATELY
+    // Double-check just_signed_out flag to prevent redirect after sign out
+    const justSignedOutCheck = localStorage.getItem('just_signed_out');
+    if (user && !justSignedOutCheck) {
       if (role) {
         console.log("[Auth] User and role available, redirecting:", { userId: user.id, role });
         if (role === "admin" && stripeOnboarding === "true") {
           setShowStripeStep(true);
         } else if (!showStripeStep) {
-          // Redirect based on role
+          // Force immediate redirect using window.location
           if (role === "admin") {
-            console.log("[Auth] Redirecting to /admin");
-            navigate("/admin", { replace: true });
+            console.log("[Auth] Force redirecting to /admin");
+            window.location.href = "/admin";
           } else if (role === "tenant") {
-            console.log("[Auth] Redirecting to /tenant");
-            navigate("/tenant", { replace: true });
+            console.log("[Auth] Force redirecting to /tenant");
+            window.location.href = "/tenant";
           }
         }
       } else {
-        // User logged in but no role - try to determine role from unit/property assignment
+        // User logged in but no role - immediately check database and force redirect
         console.log("[Auth] User logged in but no role, checking unit/property assignment");
-        const checkAndRedirect = async () => {
-          // Check if assigned to a unit (tenant)
-          const { data: unitData } = await supabase
-            .from('units')
-            .select('id')
-            .eq('tenant_id', user.id)
-            .maybeSingle();
-          
-          if (unitData) {
-            console.log("[Auth] User is assigned to a unit, redirecting to tenant dashboard");
-            navigate("/tenant", { replace: true });
-            return;
+        const checkAndForceRedirect = async () => {
+          try {
+            // Race between database checks and timeout - use window.location for instant redirect
+            const redirectResult = await Promise.race([
+              // Check if assigned to a unit (tenant)
+              supabase
+                .from('units')
+                .select('id')
+                .eq('tenant_id', user.id)
+                .maybeSingle()
+                .then(({ data: unitData }) => {
+                  if (unitData) {
+                    console.log("[Auth] Found unit, force redirecting to tenant");
+                    window.location.href = "/tenant";
+                    return "tenant";
+                  }
+                  return null;
+                }),
+              // Check if owns properties (admin)
+              supabase
+                .from('properties')
+                .select('id')
+                .eq('landlord_id', user.id)
+                .maybeSingle()
+                .then(({ data: propertyData }) => {
+                  if (propertyData) {
+                    console.log("[Auth] Found property, force redirecting to admin");
+                    window.location.href = "/admin";
+                    return "admin";
+                  }
+                  return null;
+                }),
+              // Timeout after 1 second - default to tenant
+              new Promise((resolve) => {
+                setTimeout(() => {
+                  console.log("[Auth] Role check timeout, force redirecting to tenant");
+                  window.location.href = "/tenant";
+                  resolve("timeout");
+                }, 1000);
+              })
+            ]);
+            
+            // If no redirect happened yet, force it
+            if (!redirectResult || redirectResult === "timeout") {
+              console.log("[Auth] No role determined, force redirecting to tenant");
+              window.location.href = "/tenant";
+            }
+          } catch (error) {
+            console.error("[Auth] Error checking role, force redirecting to tenant:", error);
+            window.location.href = "/tenant";
           }
-          
-          // Check if owns properties (admin)
-          const { data: propertyData } = await supabase
-            .from('properties')
-            .select('id')
-            .eq('landlord_id', user.id)
-            .maybeSingle();
-          
-          if (propertyData) {
-            console.log("[Auth] User owns properties, redirecting to admin dashboard");
-            navigate("/admin", { replace: true });
-            return;
-          }
-          
-          // Default to tenant if we can't determine
-          console.log("[Auth] Cannot determine role, defaulting to tenant dashboard");
-          navigate("/tenant", { replace: true });
         };
-        checkAndRedirect();
+        checkAndForceRedirect();
       }
     }
     // Don't try to fetch role here - let useAuth handle it
@@ -265,12 +294,88 @@ export default function Auth() {
             });
           }
         } else {
-          // Login successful - the useEffect will handle redirect once role is loaded
+          // Login successful - IMMEDIATELY redirect using window.location (bypasses React Router delays)
+          console.log("[Auth] Login successful, forcing immediate redirect");
+          
+          // Clear the just_signed_out flag since we're successfully logging in
+          localStorage.removeItem('just_signed_out');
+          
+          // Show toast briefly, then force redirect
           toast({
             title: "Login successful",
-            description: "Redirecting to your dashboard...",
+            description: "Redirecting...",
           });
-          // Don't manually redirect here - let the useEffect and ProtectedRoute handle it
+          
+          // Immediately try to determine role and redirect - use window.location for instant redirect
+          const forceRedirect = async () => {
+            try {
+              // Get current user from session immediately
+              const { data: { user: currentUser } } = await supabase.auth.getUser();
+              
+              if (currentUser) {
+                // Try quick database check with timeout
+                const redirectPromise = Promise.race([
+                  // Check if assigned to a unit (tenant)
+                  supabase
+                    .from('units')
+                    .select('id')
+                    .eq('tenant_id', currentUser.id)
+                    .maybeSingle()
+                    .then(({ data: unitData }) => {
+                      if (unitData) {
+                        console.log("[Auth] Found unit assignment, redirecting to tenant");
+                        window.location.href = "/tenant";
+                        return;
+                      }
+                      return null;
+                    }),
+                  // Check if owns properties (admin)
+                  supabase
+                    .from('properties')
+                    .select('id')
+                    .eq('landlord_id', currentUser.id)
+                    .maybeSingle()
+                    .then(({ data: propertyData }) => {
+                      if (propertyData) {
+                        console.log("[Auth] Found property ownership, redirecting to admin");
+                        window.location.href = "/admin";
+                        return;
+                      }
+                      return null;
+                    }),
+                  // Timeout after 1 second - default to tenant
+                  new Promise((resolve) => {
+                    setTimeout(() => {
+                      console.log("[Auth] Role check timeout, defaulting to tenant");
+                      window.location.href = "/tenant";
+                      resolve(null);
+                    }, 1000);
+                  })
+                ]);
+                
+                await redirectPromise;
+              } else {
+                // No user found, default redirect
+                console.log("[Auth] No user found, defaulting to tenant");
+                window.location.href = "/tenant";
+              }
+            } catch (err) {
+              console.error("[Auth] Error during redirect, defaulting to tenant:", err);
+              window.location.href = "/tenant";
+            }
+          };
+          
+          // If we already have role, redirect immediately
+          if (role === "admin") {
+            console.log("[Auth] Role is admin, redirecting immediately");
+            window.location.href = "/admin";
+          } else if (role === "tenant") {
+            console.log("[Auth] Role is tenant, redirecting immediately");
+            window.location.href = "/tenant";
+          } else {
+            // No role yet - check database but with timeout
+            forceRedirect();
+          }
         }
       }
     } catch {

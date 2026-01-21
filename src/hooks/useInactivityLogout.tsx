@@ -2,11 +2,11 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './useAuth';
 
-const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
+const INACTIVITY_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 const LAST_ACTIVITY_KEY = 'last_activity_timestamp';
 
 /**
- * Hook to automatically log out users after 15 minutes of inactivity
+ * Hook to automatically log out users after 10 minutes of inactivity
  * Works even when the tab is inactive (using Page Visibility API)
  * Persists last activity time to handle cases where user returns after days
  */
