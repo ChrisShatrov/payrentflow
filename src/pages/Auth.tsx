@@ -47,6 +47,7 @@ export default function Auth() {
   const [stripeLoading, setStripeLoading] = useState(false);
   const [isInviteFlow, setIsInviteFlow] = useState(false);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [loadingInviteDetails, setLoadingInviteDetails] = useState(false);
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
@@ -77,6 +78,35 @@ export default function Auth() {
         email: inviteEmail,
         role: "tenant"
       }));
+      
+      // Fetch invite details to get fullName and phone
+      setLoadingInviteDetails(true);
+      supabase.functions.invoke("get-invite-details", {
+        body: { invite_token: token },
+      })
+        .then(({ data, error }) => {
+          if (error) {
+            console.error("Error fetching invite details:", error);
+            toast({
+              title: "Error loading invite",
+              description: "Could not load invite details. You can still sign up manually.",
+              variant: "destructive",
+            });
+          } else if (data && !data.error) {
+            // Pre-fill fullName and phone from invite
+            setFormData(prev => ({
+              ...prev,
+              fullName: data.full_name || "",
+              phone: data.phone || "",
+            }));
+          }
+        })
+        .catch((error) => {
+          console.error("Error fetching invite details:", error);
+        })
+        .finally(() => {
+          setLoadingInviteDetails(false);
+        });
       
       // Clean up URL params
       const newSearchParams = new URLSearchParams(location.search);
@@ -637,12 +667,18 @@ export default function Auth() {
                 <Label htmlFor="fullName" className="text-foreground font-medium">
                   Full Name
                 </Label>
+                {isInviteFlow && (
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Your name was provided by your landlord and cannot be changed.
+                  </p>
+                )}
                 <Input
                   id="fullName"
                   type="text"
                   value={formData.fullName}
                   onChange={(e) => handleInputChange("fullName", e.target.value)}
-                  className="h-12 bg-background border-border/60 rounded-xl focus:border-primary"
+                  disabled={isInviteFlow}
+                  className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}
                   placeholder="John Doe"
                 />
                 {errors.fullName && (
@@ -679,12 +715,18 @@ export default function Auth() {
                 <Label htmlFor="phone" className="text-foreground font-medium">
                   Phone
                 </Label>
+                {isInviteFlow && formData.phone && (
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Your phone number was provided by your landlord and cannot be changed.
+                  </p>
+                )}
                 <Input
                   id="phone"
                   type="tel"
                   value={formData.phone}
                   onChange={(e) => handleInputChange("phone", e.target.value)}
-                  className="h-12 bg-background border-border/60 rounded-xl focus:border-primary"
+                  disabled={isInviteFlow}
+                  className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}
                   placeholder="(555) 123-4567"
                 />
                 {errors.phone && (

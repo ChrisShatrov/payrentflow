@@ -216,6 +216,8 @@ serve(async (req) => {
         landlord_id: landlordId,
         unit_id: unitId || null,
         move_in_date: move_in_date || null,
+        full_name: fullName,
+        phone: phone || null,
       });
 
     if (inviteError) {
