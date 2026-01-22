@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { Helmet } from "react-helmet-async";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Home, FileText, Settings, LogOut, User, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,11 @@ export function TenantLayout({ children }: TenantLayoutProps) {
   const { user, signOut } = useAuth();
 
   return (
-    <div className="min-h-screen bg-background">
+    <>
+      <Helmet>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <div className="min-h-screen bg-background">
       {/* Top Navigation */}
       <header className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -107,5 +112,6 @@ export function TenantLayout({ children }: TenantLayoutProps) {
         {children}
       </main>
     </div>
+    </>
   );
 }

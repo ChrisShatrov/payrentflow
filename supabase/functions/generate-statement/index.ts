@@ -72,8 +72,47 @@ serve(async (req) => {
       )
     }
 
-    // Check if this is the current month and first_month_paid is true
+    // Check move-in date logic
     const today = new Date();
+    today.setHours(0, 0, 0, 0); // Normalize to start of day for comparison
+    
+    if (unit.move_in_date) {
+      const moveInDate = new Date(unit.move_in_date);
+      moveInDate.setHours(0, 0, 0, 0);
+      
+      // Check if move-in date is in the future
+      if (moveInDate > today) {
+        console.log(`Skipping statement generation for unit ${unit_id} - move-in date ${unit.move_in_date} is in the future`);
+        return new Response(
+          JSON.stringify({ 
+            error: 'Cannot generate statement before move-in date',
+            skipped: true,
+            move_in_date: unit.move_in_date
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      
+      // Check if statement period is before move-in month
+      const [statementMonth, statementYear] = period_month.split('/').map(Number);
+      const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
+      statementMonthStart.setHours(0, 0, 0, 0);
+      
+      if (moveInDate > statementMonthStart) {
+        console.log(`Skipping statement generation for unit ${unit_id} - move-in date ${unit.move_in_date} is after statement period ${period_month}`);
+        return new Response(
+          JSON.stringify({ 
+            error: 'Cannot generate statement for period before move-in date',
+            skipped: true,
+            move_in_date: unit.move_in_date,
+            period_month
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // Check if this is the current month and first_month_paid is true
     const [month, year] = period_month.split('/');
     const isCurrentMonth = parseInt(month) === today.getMonth() + 1 && parseInt(year) === today.getFullYear();
     
@@ -88,7 +127,39 @@ serve(async (req) => {
       );
     }
 
-    const baseRent = Number(unit.monthly_rent)
+    // Calculate pro-rated rent if move-in date is in the statement month
+    const calculateProratedRent = (moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
+      if (!moveInDate) return monthlyRent;
+      
+      const [statementMonth, statementYear] = periodMonth.split('/').map(Number);
+      const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
+      const statementMonthEnd = new Date(statementYear, statementMonth, 0); // Last day of month
+      
+      // Check if move-in is in this statement month
+      if (moveInDate < statementMonthStart || moveInDate > statementMonthEnd) {
+        return monthlyRent; // Not the move-in month, use full rent
+      }
+      
+      // Calculate days in month and days from move-in to end of month
+      const daysInMonth = statementMonthEnd.getDate();
+      const moveInDay = moveInDate.getDate();
+      const daysRemaining = daysInMonth - moveInDay + 1; // +1 to include move-in day
+      
+      if (daysRemaining === daysInMonth) {
+        return monthlyRent; // Moved in on 1st, full month
+      }
+      
+      const proratedAmount = (monthlyRent / daysInMonth) * daysRemaining;
+      return Math.round(proratedAmount * 100) / 100;
+    };
+
+    const moveInDateObj = unit.move_in_date ? new Date(unit.move_in_date) : null;
+    const baseRent = calculateProratedRent(moveInDateObj, period_month, Number(unit.monthly_rent))
+    
+    // Log if pro-rated
+    if (moveInDateObj && baseRent !== Number(unit.monthly_rent)) {
+      console.log(`Pro-rated rent calculated for unit ${unit_id}: $${baseRent} (from monthly rent $${unit.monthly_rent} for move-in date ${unit.move_in_date})`);
+    }
     let additionalFees = 0
     let lateFee = 0
     let previousLateFee = 0
@@ -184,6 +255,22 @@ serve(async (req) => {
     } else {
       // Create new statement
       console.log("Creating new statement");
+      
+      // Determine initial status
+      // If first_month_paid is true and this is the move-in month, mark as paid
+      let initialStatus = today > dueDate ? 'overdue' : 'unpaid';
+      if (unit.first_month_paid && moveInDateObj) {
+        const [statementMonth, statementYear] = period_month.split('/').map(Number);
+        const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
+        const statementMonthEnd = new Date(statementYear, statementMonth, 0);
+        
+        // Check if this is the move-in month
+        if (moveInDateObj >= statementMonthStart && moveInDateObj <= statementMonthEnd) {
+          initialStatus = 'paid';
+          console.log(`Marking statement as paid - first month paid and this is the move-in month`);
+        }
+      }
+      
       const { data, error } = await supabaseClient
         .from('statements')
         .insert({
@@ -193,7 +280,7 @@ serve(async (req) => {
           additional_fees: additionalFees,
           late_fee: lateFee,
           total_due: totalDue,
-          status: today > dueDate ? 'overdue' : 'unpaid'
+          status: initialStatus
         })
         .select()
         .single()

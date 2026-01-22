@@ -47,6 +47,8 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
   const [splitPaymentFee, setSplitPaymentFee] = useState("30.00");
   const [lateFeeAmount, setLateFeeAmount] = useState("0");
   const [dailyLateFee, setDailyLateFee] = useState("0");
+  const [moveInDate, setMoveInDate] = useState("");
+  const [firstMonthPaid, setFirstMonthPaid] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -121,6 +123,8 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
         split_payment_fee: allowSplitPayment ? parseFloat(splitPaymentFee) || 30.00 : null,
         late_fee_amount: parseFloat(lateFeeAmount) || 0,
         daily_late_fee: parseFloat(dailyLateFee) || 0,
+        move_in_date: moveInDate || null,
+        first_month_paid: tenantId && tenantId !== "__none__" ? firstMonthPaid : false,
       });
 
       if (error) throw error;
@@ -137,6 +141,22 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
     }
   };
 
+  const calculateProratedRent = (moveInDate: string, monthlyRent: number): number | null => {
+    if (!moveInDate || !monthlyRent) return null;
+    
+    const moveIn = new Date(moveInDate);
+    const year = moveIn.getFullYear();
+    const month = moveIn.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const moveInDay = moveIn.getDate();
+    const daysRemaining = daysInMonth - moveInDay + 1; // +1 to include move-in day
+    
+    if (daysRemaining === daysInMonth) return null; // Full month, no pro-rating needed
+    
+    const proratedAmount = (monthlyRent / daysInMonth) * daysRemaining;
+    return Math.round(proratedAmount * 100) / 100; // Round to 2 decimals
+  };
+
   const resetForm = () => {
     setUnitNumber("");
     setTenantId("");
@@ -146,6 +166,8 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
     setSplitPaymentFee("30.00");
     setLateFeeAmount("0");
     setDailyLateFee("0");
+    setMoveInDate("");
+    setFirstMonthPaid(false);
   };
 
   return (
@@ -193,7 +215,14 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
 
             <div className="grid gap-2">
               <Label>Assign Tenant (optional)</Label>
-              <Select value={tenantId || "__none__"} onValueChange={setTenantId}>
+              <Select value={tenantId || "__none__"} onValueChange={(value) => {
+                setTenantId(value);
+                // Clear move-in date and first month paid if tenant is removed
+                if (value === "__none__") {
+                  setMoveInDate("");
+                  setFirstMonthPaid(false);
+                }
+              }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a tenant" />
                 </SelectTrigger>
@@ -214,6 +243,60 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                 </p>
               )}
             </div>
+
+            {/* Move In Date - only show when tenant is assigned */}
+            {tenantId && tenantId !== "__none__" && (
+              <div className="grid gap-2">
+                <Label htmlFor="moveInDate">Move In Date (optional)</Label>
+                <Input
+                  id="moveInDate"
+                  type="date"
+                  value={moveInDate}
+                  onChange={(e) => setMoveInDate(e.target.value)}
+                  disabled={loading}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The date when the tenant moves in. Used to calculate pro-rated rent for the first month.
+                </p>
+              </div>
+            )}
+
+            {/* First Month Paid - only show when tenant is assigned */}
+            {tenantId && tenantId !== "__none__" && (
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="firstMonthPaid"
+                  checked={firstMonthPaid}
+                  onCheckedChange={(checked) => setFirstMonthPaid(checked === true)}
+                  disabled={loading}
+                />
+                <Label htmlFor="firstMonthPaid" className="text-sm font-normal cursor-pointer">
+                  First month has been paid (tenant not responsible for current month)
+                </Label>
+              </div>
+            )}
+
+            {/* Pro-rated Rent Display - only show when tenant is assigned, move-in date is set, and not first of month */}
+            {tenantId && tenantId !== "__none__" && moveInDate && monthlyRent && (
+              (() => {
+                const prorated = calculateProratedRent(moveInDate, parseFloat(monthlyRent));
+                if (prorated === null) return null;
+                return (
+                  <div className="bg-muted/50 p-3 rounded-lg">
+                    <p className="text-sm font-medium text-foreground mb-1">Pro-rated Rent for Move-In Month</p>
+                    <p className="text-xs text-muted-foreground">
+                      Monthly Rent: ${parseFloat(monthlyRent).toFixed(2)}
+                    </p>
+                    <p className="text-lg font-semibold text-primary">
+                      Pro-rated Amount: ${prorated.toFixed(2)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      This amount will be charged for the move-in month only.
+                    </p>
+                  </div>
+                );
+              })()
+            )}
 
             <div className="grid gap-2">
               <Label htmlFor="dueDay">Due Day of Month *</Label>

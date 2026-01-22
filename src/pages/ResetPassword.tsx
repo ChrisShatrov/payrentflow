@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Helmet } from "react-helmet-async";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -210,7 +211,12 @@ export default function ResetPassword() {
 
   // Valid token - show password reset form
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+    <>
+      <Helmet>
+        <title>Reset Password — RentFlow</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md p-8">
         <div className="space-y-6">
           {/* Header */}
@@ -295,5 +301,6 @@ export default function ResetPassword() {
         </div>
       </Card>
     </div>
+    </>
   );
 }

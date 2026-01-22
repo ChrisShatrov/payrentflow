@@ -204,9 +204,27 @@ export default function AdminStatements() {
 
   const calculateYearlySummaries = () => {
     const summaries: Record<string, YearlySummary> = {};
+    const today = new Date();
+    const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+    const currentYear = today.getFullYear();
+    const currentMonthStr = `${currentMonth}/${currentYear}`;
 
     allStatements.forEach((statement) => {
       const [month, year] = statement.period_month.split("/");
+      const statementMonth = parseInt(month);
+      const statementYear = parseInt(year);
+      
+      // Filter out future statements that aren't due yet
+      // Only include statements for months that have occurred or are currently due
+      if (statementYear > currentYear || (statementYear === currentYear && statementMonth > today.getMonth() + 1)) {
+        // This is a future month - check if it's actually due yet
+        // We need to check the unit's due_day to see if the due date has passed
+        // For now, exclude all future months from the summary (they shouldn't be generated yet anyway)
+        // If they exist, they were likely generated incorrectly
+        console.log(`[AdminStatements] Excluding future statement from summary: ${statement.period_month} (current: ${currentMonthStr})`);
+        return; // Skip this statement
+      }
+      
       const key = `${year}-${statement.property_name}`;
 
       if (!summaries[key]) {

@@ -45,6 +45,8 @@ export default function Auth() {
   const [showPassword, setShowPassword] = useState(false);
   const [showStripeStep, setShowStripeStep] = useState(false);
   const [stripeLoading, setStripeLoading] = useState(false);
+  const [isInviteFlow, setIsInviteFlow] = useState(false);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
@@ -60,7 +62,31 @@ export default function Auth() {
 
   useEffect(() => {
     setIsSignUp(isSignUpRoute);
-  }, [isSignUpRoute]);
+    
+    // Check for invite token in URL
+    const searchParams = new URLSearchParams(location.search);
+    const token = searchParams.get("invite_token");
+    const inviteEmail = searchParams.get("email");
+    
+    if (token && inviteEmail) {
+      setInviteToken(token);
+      setIsInviteFlow(true);
+      setIsSignUp(true); // Force signup mode
+      setFormData(prev => ({
+        ...prev,
+        email: inviteEmail,
+        role: "tenant"
+      }));
+      
+      // Clean up URL params
+      const newSearchParams = new URLSearchParams(location.search);
+      newSearchParams.delete("invite_token");
+      newSearchParams.delete("email");
+      const newSearch = newSearchParams.toString();
+      const newUrl = newSearch ? `${location.pathname}?${newSearch}` : location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [isSignUpRoute, location]);
 
   // Check if user needs Stripe onboarding after signup
   useEffect(() => {
@@ -239,6 +265,78 @@ export default function Auth() {
             });
           }
         } else if (signUpResult.data?.user) {
+          const newUser = signUpResult.data.user;
+          
+          // If this is an invite flow, auto-confirm and login
+          if (isInviteFlow && inviteToken && newUser.id) {
+            try {
+              // Call confirm-tenant-account edge function
+              const { data: confirmData, error: confirmError } = await supabase.functions.invoke(
+                "confirm-tenant-account",
+                {
+                  body: {
+                    user_id: newUser.id,
+                    invite_token: inviteToken,
+                  },
+                }
+              );
+
+              if (confirmError || confirmData?.error) {
+                console.error("Error confirming account:", confirmError || confirmData?.error);
+                toast({
+                  title: "Account created!",
+                  description: "Please check your email to confirm your account.",
+                });
+                // Fallback: user can still confirm via email
+                setLoading(false);
+                return;
+              }
+
+              // Account confirmed, now sign in the user
+              toast({
+                title: "Account created and confirmed!",
+                description: "Signing you in...",
+              });
+
+              // Wait a moment for the confirmation to propagate
+              await new Promise(resolve => setTimeout(resolve, 1000));
+
+              // Sign in the user
+              const { error: signInError } = await signIn(formData.email, formData.password);
+              
+              if (signInError) {
+                console.error("Error signing in after confirmation:", signInError);
+                toast({
+                  title: "Account confirmed!",
+                  description: "Please sign in with your credentials.",
+                });
+                setLoading(false);
+                return;
+              }
+
+              // Success - user will be redirected by the auth flow
+              toast({
+                title: "Welcome!",
+                description: "Your account has been created and you're signed in.",
+              });
+              
+              // Force redirect to tenant dashboard
+              setTimeout(() => {
+                window.location.href = "/tenant";
+              }, 500);
+              
+              return;
+            } catch (error: any) {
+              console.error("Error in invite flow:", error);
+              toast({
+                title: "Account created!",
+                description: "Please check your email to confirm your account.",
+              });
+              setLoading(false);
+              return;
+            }
+          }
+          
           // If landlord, show Stripe onboarding step
           if (formData.role === "admin") {
             toast({
@@ -509,6 +607,7 @@ export default function Auth() {
       <Helmet>
         <title>{pageTitle}</title>
         <meta name="description" content={pageDescription} />
+        <meta name="robots" content="noindex, nofollow" />
         <link rel="canonical" href={`https://www.payrentflow.com${location.pathname}`} />
       </Helmet>
       <div className="min-h-screen bg-primary/5 flex items-center justify-center p-4">
@@ -556,12 +655,18 @@ export default function Auth() {
               <Label htmlFor="email" className="text-foreground font-medium">
                 Email
               </Label>
+              {isInviteFlow && (
+                <p className="text-sm text-muted-foreground mb-2">
+                  You've been invited to join as a tenant. Your email is pre-filled.
+                </p>
+              )}
               <Input
                 id="email"
                 type="email"
+                disabled={isInviteFlow}
                 value={formData.email}
                 onChange={(e) => handleInputChange("email", e.target.value)}
-                className="h-12 bg-background border-border/60 rounded-xl focus:border-primary"
+                className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}
                 placeholder="you@example.com"
               />
               {errors.email && (
@@ -619,11 +724,17 @@ export default function Auth() {
                 <Label htmlFor="role" className="text-foreground font-medium">
                   Role
                 </Label>
+                {isInviteFlow && (
+                  <p className="text-sm text-muted-foreground mb-2">
+                    You've been invited as a tenant.
+                  </p>
+                )}
                 <Select
                   value={formData.role}
                   onValueChange={(value) => handleInputChange("role", value)}
+                  disabled={isInviteFlow}
                 >
-                  <SelectTrigger className="h-12 bg-background border-border/60 rounded-xl focus:border-primary">
+                  <SelectTrigger className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}>
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>

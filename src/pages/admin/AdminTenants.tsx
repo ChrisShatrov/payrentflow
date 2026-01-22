@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 // import { AddTenantDialog } from "@/components/admin/AddTenantDialog";
-// import { InviteTenantDialog } from "@/components/admin/InviteTenantDialog";
+import { InviteTenantDialog } from "@/components/admin/InviteTenantDialog";
 import { UploadLeaseDialog } from "@/components/admin/UploadLeaseDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -253,11 +253,9 @@ export default function AdminTenants() {
             <h1 className="text-3xl font-bold text-foreground">Tenants</h1>
             <p className="text-muted-foreground mt-1">Manage your tenants and invitations</p>
           </div>
-          {/* Buttons hidden - users sign up on their own */}
-          {/* <div className="flex gap-3">
-            <AddTenantDialog onTenantAdded={fetchTenants} />
+          <div className="flex gap-3">
             <InviteTenantDialog onTenantInvited={fetchTenants} />
-          </div> */}
+          </div>
         </div>
 
         {/* Content */}
@@ -270,13 +268,11 @@ export default function AdminTenants() {
             <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No tenants yet</h3>
             <p className="text-muted-foreground mb-6">
-              Tenants will appear here once they sign up and are assigned to a unit.
+              Invite tenants by email or they will appear here once they sign up and are assigned to a unit.
             </p>
-            {/* Buttons hidden - users sign up on their own */}
-            {/* <div className="flex gap-3 justify-center">
-              <AddTenantDialog onTenantAdded={fetchTenants} />
+            <div className="flex gap-3 justify-center">
               <InviteTenantDialog onTenantInvited={fetchTenants} />
-            </div> */}
+            </div>
           </div>
         ) : (
           <div className="bg-card border border-border rounded-xl overflow-hidden">

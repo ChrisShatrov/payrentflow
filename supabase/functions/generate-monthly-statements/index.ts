@@ -12,11 +12,38 @@ serve(async (req) => {
 
     // Get current month in MM/YYYY format
     const today = new Date()
+    today.setHours(0, 0, 0, 0); // Normalize to start of day for comparison
     const currentMonth = String(today.getMonth() + 1).padStart(2, '0')
     const currentYear = today.getFullYear()
     const periodMonth = `${currentMonth}/${currentYear}`
 
     console.log(`Processing statements for period: ${periodMonth}`);
+
+    // Helper function to calculate pro-rated rent
+    const calculateProratedRent = (moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
+      if (!moveInDate) return monthlyRent;
+      
+      const [statementMonth, statementYear] = periodMonth.split('/').map(Number);
+      const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
+      const statementMonthEnd = new Date(statementYear, statementMonth, 0); // Last day of month
+      
+      // Check if move-in is in this statement month
+      if (moveInDate < statementMonthStart || moveInDate > statementMonthEnd) {
+        return monthlyRent; // Not the move-in month, use full rent
+      }
+      
+      // Calculate days in month and days from move-in to end of month
+      const daysInMonth = statementMonthEnd.getDate();
+      const moveInDay = moveInDate.getDate();
+      const daysRemaining = daysInMonth - moveInDay + 1; // +1 to include move-in day
+      
+      if (daysRemaining === daysInMonth) {
+        return monthlyRent; // Moved in on 1st, full month
+      }
+      
+      const proratedAmount = (monthlyRent / daysInMonth) * daysRemaining;
+      return Math.round(proratedAmount * 100) / 100;
+    };
 
     // Get all units with tenants
     const { data: units, error: unitsError } = await supabaseClient
@@ -35,6 +62,27 @@ serve(async (req) => {
 
     for (const unit of units || []) {
       try {
+        // Check move-in date logic
+        if (unit.move_in_date) {
+          const moveInDate = new Date(unit.move_in_date);
+          moveInDate.setHours(0, 0, 0, 0);
+          
+          // Check if move-in date is in the future
+          if (moveInDate > today) {
+            console.log(`Skipping statement generation for unit ${unit.id} - move-in date ${unit.move_in_date} is in the future`);
+            continue;
+          }
+          
+          // Check if statement period is before move-in month
+          const statementMonthStart = new Date(currentYear, today.getMonth(), 1);
+          statementMonthStart.setHours(0, 0, 0, 0);
+          
+          if (moveInDate > statementMonthStart) {
+            console.log(`Skipping statement generation for unit ${unit.id} - move-in date ${unit.move_in_date} is after statement period ${periodMonth}`);
+            continue;
+          }
+        }
+
         // Skip current month if first_month_paid is true (tenant not responsible for current month)
         if (unit.first_month_paid) {
           console.log(`Skipping statement generation for unit ${unit.id} - first month already paid`);
@@ -51,7 +99,8 @@ serve(async (req) => {
 
         if (existing) {
           // Update existing statement
-          const baseRent = Number(unit.monthly_rent)
+          const moveInDateObj = unit.move_in_date ? new Date(unit.move_in_date) : null;
+          const baseRent = calculateProratedRent(moveInDateObj, periodMonth, Number(unit.monthly_rent));
           let lateFee = 0
 
           const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
@@ -122,7 +171,14 @@ serve(async (req) => {
           results.push({ unit_id: unit.id, action: 'updated' })
         } else {
           // Create new statement
-          const baseRent = Number(unit.monthly_rent)
+          const moveInDateObj = unit.move_in_date ? new Date(unit.move_in_date) : null;
+          const baseRent = calculateProratedRent(moveInDateObj, periodMonth, Number(unit.monthly_rent));
+          
+          // Log if pro-rated
+          if (moveInDateObj && baseRent !== Number(unit.monthly_rent)) {
+            console.log(`Pro-rated rent calculated for unit ${unit.id}: $${baseRent} (from monthly rent $${unit.monthly_rent} for move-in date ${unit.move_in_date})`);
+          }
+          
           let lateFee = 0
 
           const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
@@ -179,6 +235,20 @@ serve(async (req) => {
           // They are calculated dynamically at payment time
           const totalDue = baseRent + lateFee
 
+          // Determine initial status
+          // If first_month_paid is true and this is the move-in month, mark as paid
+          let initialStatus = today > dueDate ? 'overdue' : 'unpaid';
+          if (unit.first_month_paid && moveInDateObj) {
+            const statementMonthStart = new Date(currentYear, today.getMonth(), 1);
+            const statementMonthEnd = new Date(currentYear, today.getMonth() + 1, 0);
+            
+            // Check if this is the move-in month
+            if (moveInDateObj >= statementMonthStart && moveInDateObj <= statementMonthEnd) {
+              initialStatus = 'paid';
+              console.log(`Marking statement as paid for unit ${unit.id} - first month paid and this is the move-in month`);
+            }
+          }
+
           await supabaseClient
             .from('statements')
             .insert({
@@ -188,7 +258,7 @@ serve(async (req) => {
               additional_fees: 0,
               late_fee: lateFee,
               total_due: totalDue,
-              status: today > dueDate ? 'overdue' : 'unpaid'
+              status: initialStatus
             })
 
           console.log(`Created new statement for unit ${unit.id}`);

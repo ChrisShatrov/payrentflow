@@ -61,6 +61,7 @@ serve(async (req) => {
         units!inner(
           unit_number,
           monthly_rent,
+          move_in_date,
           due_day,
           late_fee_amount,
           daily_late_fee,
@@ -318,21 +319,78 @@ serve(async (req) => {
 
     // Base rent row
     y -= 25;
-    page.drawText(`Monthly Rent - ${formatPeriod(statement.period_month)}`, {
-      x: 50,
-      y,
-      size: 11,
-      font: helvetica,
-      color: textColor,
-    });
+    
+    // Check if this statement was pro-rated
+    const isProrated = unit.move_in_date && statement.base_rent !== unit.monthly_rent;
+    
+    if (isProrated) {
+      // Show pro-rated information
+      const moveInDate = new Date(unit.move_in_date);
+      const [statementMonth, statementYear] = statement.period_month.split('/').map(Number);
+      const statementMonthEnd = new Date(statementYear, statementMonth, 0);
+      const moveInDateFormatted = moveInDate.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      const monthEndFormatted = statementMonthEnd.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      
+      page.drawText(`Pro-rated Rent - ${formatPeriod(statement.period_month)}`, {
+        x: 50,
+        y,
+        size: 11,
+        font: helvetica,
+        color: textColor,
+      });
 
-    page.drawText(formatCurrency(statement.base_rent), {
-      x: width - 100,
-      y,
-      size: 11,
-      font: helvetica,
-      color: textColor,
-    });
+      page.drawText(formatCurrency(statement.base_rent), {
+        x: width - 100,
+        y,
+        size: 11,
+        font: helvetica,
+        color: textColor,
+      });
+      
+      // Add pro-rated details below
+      y -= 15;
+      page.drawText(`(Pro-rated from ${moveInDateFormatted} to ${monthEndFormatted})`, {
+        x: 50,
+        y,
+        size: 9,
+        font: helvetica,
+        color: grayColor,
+      });
+      
+      y -= 12;
+      page.drawText(`Monthly Rent: ${formatCurrency(unit.monthly_rent)} → Pro-rated: ${formatCurrency(statement.base_rent)}`, {
+        x: 50,
+        y,
+        size: 9,
+        font: helvetica,
+        color: grayColor,
+      });
+    } else {
+      // Regular monthly rent
+      page.drawText(`Monthly Rent - ${formatPeriod(statement.period_month)}`, {
+        x: 50,
+        y,
+        size: 11,
+        font: helvetica,
+        color: textColor,
+      });
+
+      page.drawText(formatCurrency(statement.base_rent), {
+        x: width - 100,
+        y,
+        size: 11,
+        font: helvetica,
+        color: textColor,
+      });
+    }
 
     // Late fee row
     if (statement.late_fee > 0) {

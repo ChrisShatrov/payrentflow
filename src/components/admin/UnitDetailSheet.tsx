@@ -51,6 +51,7 @@ interface UnitDetailSheetProps {
     daily_late_fee: number;
     tenant_id: string | null;
     first_month_paid?: boolean;
+    move_in_date?: string | null;
     tenantName?: string | null;
     tenantEmail?: string | null;
   } | null;
@@ -75,6 +76,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     split_payment_fee: 30.00,
     tenant_id: "",
     first_month_paid: false,
+    move_in_date: "",
   });
 
   const fetchTenants = async () => {
@@ -218,6 +220,11 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
   };
 
   const handleEdit = () => {
+    // Format move_in_date for date input (YYYY-MM-DD)
+    const moveInDateFormatted = unit.move_in_date 
+      ? new Date(unit.move_in_date).toISOString().split('T')[0]
+      : "";
+    
     setFormData({
       monthly_rent: unit.monthly_rent,
       due_day: unit.due_day,
@@ -227,6 +234,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       split_payment_fee: unit.split_payment_fee || 30.00,
       tenant_id: unit.tenant_id || "",
       first_month_paid: unit.first_month_paid || false,
+      move_in_date: moveInDateFormatted,
     });
     setIsEditing(true);
   };
@@ -261,6 +269,14 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       if (formData.first_month_paid !== (unit.first_month_paid || false)) {
         changes.push(`First month paid status changed from ${unit.first_month_paid ? 'paid' : 'unpaid'} to ${formData.first_month_paid ? 'paid' : 'unpaid'}`);
       }
+      const currentMoveInDate = unit.move_in_date ? new Date(unit.move_in_date).toISOString().split('T')[0] : "";
+      if (formData.move_in_date !== currentMoveInDate) {
+        if (formData.move_in_date) {
+          changes.push(`Move-in date changed from ${currentMoveInDate || 'not set'} to ${formData.move_in_date}`);
+        } else {
+          changes.push(`Move-in date removed`);
+        }
+      }
       if (formData.tenant_id !== (unit.tenant_id || "")) {
         const oldTenant = tenants.find(t => t.id === unit.tenant_id);
         const newTenant = tenants.find(t => t.id === formData.tenant_id);
@@ -281,6 +297,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         allow_split_payment: formData.allow_split_payment,
         split_payment_fee: formData.allow_split_payment ? formData.split_payment_fee : null,
         first_month_paid: formData.first_month_paid,
+        move_in_date: formData.move_in_date || null,
       };
 
       // Handle tenant_id update - explicitly set to null if empty string, otherwise use the value
@@ -469,7 +486,23 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                   No tenants available. Add tenants in the Tenants tab first.
                 </p>
               )}
-              {/* First Month Paid Checkbox - only show when assigning a tenant */}
+              {/* Move In Date - only show when tenant is assigned */}
+              {formData.tenant_id && formData.tenant_id !== "__none__" && (
+                <div className="grid gap-2 pt-2">
+                  <Label htmlFor="move_in_date">Move In Date (optional)</Label>
+                  <Input
+                    id="move_in_date"
+                    type="date"
+                    value={formData.move_in_date}
+                    onChange={(e) => setFormData({ ...formData, move_in_date: e.target.value })}
+                    disabled={saving}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The date when the tenant moves in. Used to calculate pro-rated rent for the first month.
+                  </p>
+                </div>
+              )}
+              {/* First Month Paid Checkbox - only show when tenant is assigned */}
               {formData.tenant_id && formData.tenant_id !== "__none__" && (
                 <div className="flex items-center space-x-2 pt-2">
                   <Checkbox
@@ -482,6 +515,43 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                     First month has been paid (tenant not responsible for current month)
                   </Label>
                 </div>
+              )}
+              {/* Pro-rated Rent Display - only show when tenant is assigned, move-in date is set, and not first of month */}
+              {formData.tenant_id && formData.tenant_id !== "__none__" && formData.move_in_date && formData.monthly_rent > 0 && (
+                (() => {
+                  const calculateProratedRent = (moveInDate: string, monthlyRent: number): number | null => {
+                    if (!moveInDate || !monthlyRent) return null;
+                    
+                    const moveIn = new Date(moveInDate);
+                    const year = moveIn.getFullYear();
+                    const month = moveIn.getMonth();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    const moveInDay = moveIn.getDate();
+                    const daysRemaining = daysInMonth - moveInDay + 1; // +1 to include move-in day
+                    
+                    if (daysRemaining === daysInMonth) return null; // Full month, no pro-rating needed
+                    
+                    const proratedAmount = (monthlyRent / daysInMonth) * daysRemaining;
+                    return Math.round(proratedAmount * 100) / 100; // Round to 2 decimals
+                  };
+                  
+                  const prorated = calculateProratedRent(formData.move_in_date, formData.monthly_rent);
+                  if (prorated === null) return null;
+                  return (
+                    <div className="bg-muted/50 p-3 rounded-lg mt-2">
+                      <p className="text-sm font-medium text-foreground mb-1">Pro-rated Rent for Move-In Month</p>
+                      <p className="text-xs text-muted-foreground">
+                        Monthly Rent: ${formData.monthly_rent.toFixed(2)}
+                      </p>
+                      <p className="text-lg font-semibold text-primary">
+                        Pro-rated Amount: ${prorated.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        This amount will be charged for the move-in month only.
+                      </p>
+                    </div>
+                  );
+                })()
               )}
             </div>
 

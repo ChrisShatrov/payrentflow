@@ -41,6 +41,7 @@ export function InviteTenantDialog({ onTenantInvited }: InviteTenantDialogProps)
   const [phone, setPhone] = useState("");
   const [selectedProperty, setSelectedProperty] = useState("");
   const [selectedUnit, setSelectedUnit] = useState("");
+  const [moveInDate, setMoveInDate] = useState("");
   const [properties, setProperties] = useState<Property[]>([]);
 
   useEffect(() => {
@@ -100,6 +101,7 @@ export function InviteTenantDialog({ onTenantInvited }: InviteTenantDialogProps)
           fullName: fullName.trim(),
           phone: phone.trim() || null,
           unitId: selectedUnit || null,
+          move_in_date: moveInDate || null,
         },
       });
 
@@ -111,6 +113,7 @@ export function InviteTenantDialog({ onTenantInvited }: InviteTenantDialogProps)
       setPhone("");
       setSelectedProperty("");
       setSelectedUnit("");
+      setMoveInDate("");
       setOpen(false);
       onTenantInvited();
     } catch (error: any) {
@@ -172,7 +175,11 @@ export function InviteTenantDialog({ onTenantInvited }: InviteTenantDialogProps)
             </div>
             <div className="grid gap-2">
               <Label>Property (optional)</Label>
-              <Select value={selectedProperty} onValueChange={(v) => { setSelectedProperty(v); setSelectedUnit(""); }}>
+              <Select value={selectedProperty} onValueChange={(v) => { 
+                setSelectedProperty(v); 
+                setSelectedUnit("");
+                setMoveInDate("");
+              }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a property" />
                 </SelectTrigger>
@@ -186,21 +193,41 @@ export function InviteTenantDialog({ onTenantInvited }: InviteTenantDialogProps)
               </Select>
             </div>
             {selectedProperty && selectedPropertyUnits.length > 0 && (
-              <div className="grid gap-2">
-                <Label>Unit (optional)</Label>
-                <Select value={selectedUnit} onValueChange={setSelectedUnit}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a unit" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedPropertyUnits.map((unit) => (
-                      <SelectItem key={unit.id} value={unit.id}>
-                        Unit {unit.unit_number}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              <>
+                <div className="grid gap-2">
+                  <Label>Unit (optional)</Label>
+                  <Select value={selectedUnit} onValueChange={(v) => {
+                    setSelectedUnit(v);
+                    if (!v) setMoveInDate("");
+                  }}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a unit" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectedPropertyUnits.map((unit) => (
+                        <SelectItem key={unit.id} value={unit.id}>
+                          Unit {unit.unit_number}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {selectedUnit && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="moveInDate">Move In Date (optional)</Label>
+                    <Input
+                      id="moveInDate"
+                      type="date"
+                      value={moveInDate}
+                      onChange={(e) => setMoveInDate(e.target.value)}
+                      disabled={loading}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The date when the tenant moves in. Used to calculate pro-rated rent for the first month.
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </div>
           <DialogFooter>
