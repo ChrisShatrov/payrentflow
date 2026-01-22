@@ -5,6 +5,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -12,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { Eye, EyeOff, Loader2, ArrowLeft, CreditCard } from "lucide-react";
@@ -22,7 +31,14 @@ const signUpSchema = z.object({
   email: z.string().email("Please enter a valid email"),
   phone: z.string().min(10, "Please enter a valid phone number").max(20),
   password: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string().min(6, "Password must be at least 6 characters"),
   role: z.enum(["tenant", "admin"]),
+  agreedToTerms: z.boolean().refine((val) => val === true, {
+    message: "You must agree to the terms and conditions",
+  }),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords do not match",
+  path: ["confirmPassword"],
 });
 
 const signInSchema = z.object({
@@ -43,17 +59,21 @@ export default function Auth() {
     : "Sign in to your RentFlow account to manage properties, track payments, and collect rent online.";
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showStripeStep, setShowStripeStep] = useState(false);
   const [stripeLoading, setStripeLoading] = useState(false);
   const [isInviteFlow, setIsInviteFlow] = useState(false);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [loadingInviteDetails, setLoadingInviteDetails] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
     phone: "",
     password: "",
-    role: "tenant",
+    confirmPassword: "",
+    role: "admin", // Default to admin for regular signup
+    agreedToTerms: false,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -76,7 +96,7 @@ export default function Auth() {
       setFormData(prev => ({
         ...prev,
         email: inviteEmail,
-        role: "tenant"
+        role: "tenant" // Invite flow still uses tenant role
       }));
       
       // Fetch invite details to get fullName and phone
@@ -115,6 +135,12 @@ export default function Auth() {
       const newSearch = newSearchParams.toString();
       const newUrl = newSearch ? `${location.pathname}?${newSearch}` : location.pathname;
       window.history.replaceState({}, "", newUrl);
+    } else if (isSignUpRoute) {
+      // Regular signup route - lock to admin
+      setFormData(prev => ({
+        ...prev,
+        role: "admin"
+      }));
     }
   }, [isSignUpRoute, location]);
 
@@ -262,6 +288,23 @@ export default function Auth() {
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     setErrors((prev) => ({ ...prev, [field]: "" }));
+  };
+
+  // Check if form is valid for signup
+  const isSignUpFormValid = () => {
+    if (!isSignUp) return true; // Sign in form doesn't need this validation
+    
+    // Check all required fields are filled
+    if (!formData.fullName.trim()) return false;
+    if (!formData.email.trim()) return false;
+    if (!formData.phone.trim()) return false;
+    if (!formData.password.trim()) return false;
+    if (!formData.confirmPassword.trim()) return false;
+    if (!formData.agreedToTerms) return false; // Terms must be agreed to
+    
+    // Validate using schema
+    const result = signUpSchema.safeParse(formData);
+    return result.success;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -745,7 +788,7 @@ export default function Auth() {
             {isSignUp && (
               <div className="space-y-2">
                 <Label htmlFor="fullName" className="text-foreground font-medium">
-                  Full Name
+                  Full Name <span className="text-destructive">*</span>
                 </Label>
                 {isInviteFlow && (
                   <p className="text-sm text-muted-foreground mb-2">
@@ -760,6 +803,7 @@ export default function Auth() {
                   disabled={isInviteFlow}
                   className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}
                   placeholder="John Doe"
+                  required
                 />
                 {errors.fullName && (
                   <p className="text-destructive text-sm">{errors.fullName}</p>
@@ -769,7 +813,7 @@ export default function Auth() {
 
             <div className="space-y-2">
               <Label htmlFor="email" className="text-foreground font-medium">
-                Email
+                Email <span className="text-destructive">*</span>
               </Label>
               {isInviteFlow && (
                 <p className="text-sm text-muted-foreground mb-2">
@@ -784,6 +828,7 @@ export default function Auth() {
                 onChange={(e) => handleInputChange("email", e.target.value)}
                 className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}
                 placeholder="you@example.com"
+                required
               />
               {errors.email && (
                 <p className="text-destructive text-sm">{errors.email}</p>
@@ -793,7 +838,7 @@ export default function Auth() {
             {isSignUp && (
               <div className="space-y-2">
                 <Label htmlFor="phone" className="text-foreground font-medium">
-                  Phone
+                  Phone <span className="text-destructive">*</span>
                 </Label>
                 {isInviteFlow && formData.phone && (
                   <p className="text-sm text-muted-foreground mb-2">
@@ -808,6 +853,7 @@ export default function Auth() {
                   disabled={isInviteFlow}
                   className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}
                   placeholder="(555) 123-4567"
+                  required
                 />
                 {errors.phone && (
                   <p className="text-destructive text-sm">{errors.phone}</p>
@@ -817,7 +863,7 @@ export default function Auth() {
 
             <div className="space-y-2">
               <Label htmlFor="password" className="text-foreground font-medium">
-                Password
+                Password <span className="text-destructive">*</span>
               </Label>
               <div className="relative">
                 <Input
@@ -827,6 +873,7 @@ export default function Auth() {
                   onChange={(e) => handleInputChange("password", e.target.value)}
                   className="h-12 bg-background border-border/60 rounded-xl focus:border-primary pr-12"
                   placeholder="••••••••"
+                  required
                 />
                 <button
                   type="button"
@@ -843,20 +890,47 @@ export default function Auth() {
 
             {isSignUp && (
               <div className="space-y-2">
+                <Label htmlFor="confirmPassword" className="text-foreground font-medium">
+                  Confirm Password <span className="text-destructive">*</span>
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={formData.confirmPassword}
+                    onChange={(e) => handleInputChange("confirmPassword", e.target.value)}
+                    className="h-12 bg-background border-border/60 rounded-xl focus:border-primary pr-12"
+                    placeholder="••••••••"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
+                {errors.confirmPassword && (
+                  <p className="text-destructive text-sm">{errors.confirmPassword}</p>
+                )}
+              </div>
+            )}
+
+            {isSignUp && isInviteFlow && (
+              <div className="space-y-2">
                 <Label htmlFor="role" className="text-foreground font-medium">
                   Role
                 </Label>
-                {isInviteFlow && (
-                  <p className="text-sm text-muted-foreground mb-2">
-                    You've been invited as a tenant.
-                  </p>
-                )}
+                <p className="text-sm text-muted-foreground mb-2">
+                  You've been invited as a tenant.
+                </p>
                 <Select
                   value={formData.role}
                   onValueChange={(value) => handleInputChange("role", value)}
-                  disabled={isInviteFlow}
+                  disabled={true}
                 >
-                  <SelectTrigger className={`h-12 bg-background border-border/60 rounded-xl focus:border-primary ${isInviteFlow ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                  <SelectTrigger className="h-12 bg-background border-border/60 rounded-xl focus:border-primary opacity-60 cursor-not-allowed">
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
@@ -870,22 +944,65 @@ export default function Auth() {
               </div>
             )}
 
+            {isSignUp && !isInviteFlow && (
+              <div className="space-y-2 mt-2">
+                <p className="text-center text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">Sign up is for Landlords only.</span>{" "}
+                  Tenants will be invited by their landlord.
+                </p>
+                <p className="text-center text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">One profile, multiple properties.</span>{" "}
+                  Create a single account to manage all your rental properties.
+                </p>
+              </div>
+            )}
+
             {isSignUp && (
-              <p className="text-center text-sm text-muted-foreground mt-4">
-                Have any questions before signing up? Email us at{" "}
-                <a 
-                  href="mailto:support@payrentflow.com" 
-                  className="text-primary hover:underline font-medium"
-                >
-                  support@payrentflow.com
-                </a>
-              </p>
+              <div className="space-y-4 mt-4">
+                <div className="flex items-start space-x-3">
+                  <Checkbox
+                    id="agreedToTerms"
+                    checked={formData.agreedToTerms}
+                    onCheckedChange={(checked) => 
+                      setFormData(prev => ({ ...prev, agreedToTerms: checked === true }))
+                    }
+                    className="mt-1"
+                  />
+                  <Label 
+                    htmlFor="agreedToTerms" 
+                    className="text-sm text-foreground cursor-pointer leading-relaxed"
+                  >
+                    I agree to the{" "}
+                    <button
+                      type="button"
+                      onClick={() => setShowTermsModal(true)}
+                      className="text-primary hover:underline font-medium"
+                    >
+                      Terms and Conditions
+                    </button>
+                    <span className="text-destructive"> *</span>
+                  </Label>
+                </div>
+                {errors.agreedToTerms && (
+                  <p className="text-destructive text-sm">{errors.agreedToTerms}</p>
+                )}
+                
+                <p className="text-center text-sm text-muted-foreground">
+                  Have any questions before signing up? Email us at{" "}
+                  <a 
+                    href="mailto:support@payrentflow.com" 
+                    className="text-primary hover:underline font-medium"
+                  >
+                    support@payrentflow.com
+                  </a>
+                </p>
+              </div>
             )}
 
             <Button
               type="submit"
-              disabled={loading}
-              className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-semibold text-base mt-6 transition-all duration-200"
+              disabled={loading || (isSignUp && !isSignUpFormValid())}
+              className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-semibold text-base mt-6 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <Loader2 className="animate-spin mr-2" size={20} />
@@ -905,8 +1022,101 @@ export default function Auth() {
             </Link>
           </p>
         </div>
+        </div>
       </div>
-      </div>
+
+      {/* Terms and Conditions Modal */}
+      <Dialog open={showTermsModal} onOpenChange={setShowTermsModal}>
+        <DialogContent className="max-w-2xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>Terms and Conditions</DialogTitle>
+            <DialogDescription>
+              Please read and accept our terms and conditions to continue.
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[60vh] pr-4">
+            <div className="space-y-4 text-sm text-foreground">
+              <div>
+                <h3 className="font-semibold text-base mb-2">1. Account Requirements</h3>
+                <p className="text-muted-foreground">
+                  By creating an account with RentFlow, you agree to maintain an active account with at least one active tenant. 
+                  An active tenant is defined as a tenant who is currently assigned to a unit and has an active rental agreement.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">2. Monthly Service Fee</h3>
+                <p className="text-muted-foreground">
+                  If your account does not have at least one active tenant at any point during a billing cycle, you will be 
+                  charged a monthly service fee of $50.00 USD. This fee will be automatically charged to your payment method 
+                  on file at the beginning of each month in which your account does not meet the active tenant requirement.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">3. Account Activity</h3>
+                <p className="text-muted-foreground">
+                  You are responsible for maintaining accurate tenant information and ensuring that your account reflects 
+                  current rental agreements. RentFlow reserves the right to verify account activity and tenant status at any time.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">4. Payment Processing</h3>
+                <p className="text-muted-foreground">
+                  All fees will be processed through our secure payment system. You agree to maintain a valid payment method 
+                  on file and authorize RentFlow to charge applicable fees as described in these terms.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">5. Service Availability</h3>
+                <p className="text-muted-foreground">
+                  RentFlow provides property management and rent collection services. You agree to use the service in 
+                  accordance with all applicable laws and regulations. RentFlow reserves the right to modify or discontinue 
+                  services with reasonable notice.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">6. Data and Privacy</h3>
+                <p className="text-muted-foreground">
+                  Your data is securely stored and processed in accordance with our Privacy Policy. You retain ownership 
+                  of all data you provide and can request deletion of your account and data at any time.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">7. Limitation of Liability</h3>
+                <p className="text-muted-foreground">
+                  RentFlow provides the service "as is" and makes no warranties regarding uninterrupted or error-free service. 
+                  Our liability is limited to the amount of fees paid in the previous 12 months.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-base mb-2">8. Changes to Terms</h3>
+                <p className="text-muted-foreground">
+                  RentFlow reserves the right to modify these terms at any time. Material changes will be communicated via 
+                  email or through the service. Continued use of the service after changes constitutes acceptance of the new terms.
+                </p>
+              </div>
+
+              <div className="pt-4 border-t">
+                <p className="text-muted-foreground">
+                  By checking the "I agree to the Terms and Conditions" checkbox, you acknowledge that you have read, 
+                  understood, and agree to be bound by these terms and conditions.
+                </p>
+              </div>
+            </div>
+          </ScrollArea>
+          <div className="flex justify-end pt-4">
+            <Button onClick={() => setShowTermsModal(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
