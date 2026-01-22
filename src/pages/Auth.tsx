@@ -121,12 +121,24 @@ export default function Auth() {
   // Check if user needs Stripe onboarding after signup
   useEffect(() => {
     // CRITICAL: Check if we just signed out FIRST - before anything else
+    // But only block if it's been less than 2 seconds (recent sign out)
+    // This allows login to proceed after auto-logout
     const justSignedOut = localStorage.getItem('just_signed_out');
     if (justSignedOut) {
-      console.log("[Auth] Just signed out, preventing all redirects");
-      // Don't remove the flag here - let it persist to prevent redirect loops
-      // The flag will be cleared when user successfully logs in again
-      return;
+      const signOutTime = parseInt(justSignedOut, 10);
+      const timeSinceSignOut = Date.now() - signOutTime;
+      const TWO_SECONDS = 2 * 1000;
+      
+      // Only block redirects if sign out was very recent (within 2 seconds)
+      // This prevents blocking legitimate logins after auto-logout
+      if (timeSinceSignOut < TWO_SECONDS) {
+        console.log("[Auth] Just signed out (recent), preventing redirects");
+        return;
+      } else {
+        // Sign out was more than 2 seconds ago, clear the flag to allow login
+        console.log("[Auth] Sign out was more than 2 seconds ago, clearing flag to allow login");
+        localStorage.removeItem('just_signed_out');
+      }
     }
     
     // Wait for auth to finish loading before redirecting
@@ -155,8 +167,22 @@ export default function Auth() {
     
     // If user is logged in AND we didn't just sign out, redirect them IMMEDIATELY
     // Double-check just_signed_out flag to prevent redirect after sign out
+    // But only block if sign out was very recent (within 2 seconds)
     const justSignedOutCheck = localStorage.getItem('just_signed_out');
-    if (user && !justSignedOutCheck) {
+    let shouldBlockRedirect = false;
+    if (justSignedOutCheck) {
+      const signOutTime = parseInt(justSignedOutCheck, 10);
+      const timeSinceSignOut = Date.now() - signOutTime;
+      const TWO_SECONDS = 2 * 1000;
+      shouldBlockRedirect = timeSinceSignOut < TWO_SECONDS;
+      
+      if (!shouldBlockRedirect) {
+        // Sign out was more than 2 seconds ago, clear the flag
+        localStorage.removeItem('just_signed_out');
+      }
+    }
+    
+    if (user && !shouldBlockRedirect) {
       if (role) {
         console.log("[Auth] User and role available, redirecting:", { userId: user.id, role });
         if (role === "admin" && stripeOnboarding === "true") {
@@ -367,6 +393,31 @@ export default function Auth() {
             }
           }
           
+          // Auto-confirm all new signups (not just invited tenants)
+          if (newUser.id && !isInviteFlow) {
+            try {
+              // Call manually-confirm-user edge function to auto-confirm
+              const { data: confirmData, error: confirmError } = await supabase.functions.invoke(
+                "manually-confirm-user",
+                {
+                  body: {
+                    user_id: newUser.id,
+                  },
+                }
+              );
+
+              if (confirmError || confirmData?.error) {
+                console.error("Error auto-confirming account:", confirmError || confirmData?.error);
+                // Continue anyway - user can confirm via email if needed
+              } else {
+                console.log("Account auto-confirmed successfully");
+              }
+            } catch (error: any) {
+              console.error("Error in auto-confirm flow:", error);
+              // Continue anyway - user can confirm via email if needed
+            }
+          }
+          
           // If landlord, show Stripe onboarding step
           if (formData.role === "admin") {
             toast({
@@ -405,6 +456,9 @@ export default function Auth() {
           return;
         }
 
+        // Clear just_signed_out flag BEFORE attempting login to prevent redirect blocking
+        localStorage.removeItem('just_signed_out');
+        
         const { error } = await signIn(formData.email, formData.password);
 
         if (error) {
@@ -422,73 +476,96 @@ export default function Auth() {
             });
           }
         } else {
-          // Login successful - IMMEDIATELY redirect using window.location (bypasses React Router delays)
-          console.log("[Auth] Login successful, forcing immediate redirect");
+          // Login successful - wait for session to be established before redirecting
+          console.log("[Auth] Login successful, waiting for session to be established");
           
-          // Clear the just_signed_out flag since we're successfully logging in
-          localStorage.removeItem('just_signed_out');
-          
-          // Show toast briefly, then force redirect
+          // Show toast briefly
           toast({
             title: "Login successful",
             description: "Redirecting...",
           });
           
-          // Immediately try to determine role and redirect - use window.location for instant redirect
-          const forceRedirect = async () => {
+          // Wait for session to be established and auth state to update
+          const waitForSessionAndRedirect = async () => {
             try {
-              // Get current user from session immediately
-              const { data: { user: currentUser } } = await supabase.auth.getUser();
+              // Wait for session to be available (with timeout)
+              let attempts = 0;
+              const maxAttempts = 20; // 2 seconds max wait
               
-              if (currentUser) {
-                // Try quick database check with timeout
-                const redirectPromise = Promise.race([
-                  // Check if assigned to a unit (tenant)
-                  supabase
-                    .from('units')
-                    .select('id')
-                    .eq('tenant_id', currentUser.id)
-                    .maybeSingle()
-                    .then(({ data: unitData }) => {
-                      if (unitData) {
-                        console.log("[Auth] Found unit assignment, redirecting to tenant");
-                        window.location.href = "/tenant";
-                        return;
-                      }
-                      return null;
-                    }),
-                  // Check if owns properties (admin)
-                  supabase
-                    .from('properties')
-                    .select('id')
-                    .eq('landlord_id', currentUser.id)
-                    .maybeSingle()
-                    .then(({ data: propertyData }) => {
-                      if (propertyData) {
-                        console.log("[Auth] Found property ownership, redirecting to admin");
-                        window.location.href = "/admin";
-                        return;
-                      }
-                      return null;
-                    }),
-                  // Timeout after 1 second - default to tenant
-                  new Promise((resolve) => {
-                    setTimeout(() => {
-                      console.log("[Auth] Role check timeout, defaulting to tenant");
-                      window.location.href = "/tenant";
-                      resolve(null);
-                    }, 1000);
-                  })
-                ]);
+              while (attempts < maxAttempts) {
+                const { data: { session: currentSession } } = await supabase.auth.getSession();
                 
-                await redirectPromise;
-              } else {
-                // No user found, default redirect
-                console.log("[Auth] No user found, defaulting to tenant");
-                window.location.href = "/tenant";
+                if (currentSession?.user) {
+                  console.log("[Auth] Session established, proceeding with redirect");
+                  
+                  // Wait a tiny bit more for React state to update
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                  
+                  // Get current user from session
+                  const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+              
+                  if (userError) {
+                    console.error("[Auth] Error getting user:", userError);
+                    // Fallback: redirect to tenant
+                    window.location.href = "/tenant";
+                    return;
+                  }
+                  
+                  if (currentUser) {
+                    // Try quick database check with timeout
+                    const redirectPromise = Promise.race([
+                      // Check if assigned to a unit (tenant)
+                      supabase
+                        .from('units')
+                        .select('id')
+                        .eq('tenant_id', currentUser.id)
+                        .maybeSingle()
+                        .then(({ data: unitData }) => {
+                          if (unitData) {
+                            console.log("[Auth] Found unit assignment, redirecting to tenant");
+                            window.location.href = "/tenant";
+                            return "tenant";
+                          }
+                          return null;
+                        }),
+                      // Check if owns properties (admin)
+                      supabase
+                        .from('properties')
+                        .select('id')
+                        .eq('landlord_id', currentUser.id)
+                        .maybeSingle()
+                        .then(({ data: propertyData }) => {
+                          if (propertyData) {
+                            console.log("[Auth] Found property ownership, redirecting to admin");
+                            window.location.href = "/admin";
+                            return "admin";
+                          }
+                          return null;
+                        }),
+                      // Timeout after 500ms - default to tenant (faster timeout)
+                      new Promise(resolve => setTimeout(() => {
+                        console.log("[Auth] Timeout reached, defaulting to tenant redirect");
+                        window.location.href = "/tenant";
+                        resolve("timeout");
+                      }, 500))
+                    ]);
+                    
+                    await redirectPromise;
+                    return; // Success, exit function
+                  }
+                }
+                
+                // Session not ready yet, wait and retry
+                attempts++;
+                await new Promise(resolve => setTimeout(resolve, 100));
               }
-            } catch (err) {
-              console.error("[Auth] Error during redirect, defaulting to tenant:", err);
+              
+              // If we get here, session never established - fallback redirect
+              console.log("[Auth] Session not established after max attempts, redirecting to tenant");
+              window.location.href = "/tenant";
+            } catch (error) {
+              console.error("[Auth] Error in waitForSessionAndRedirect:", error);
+              // Fallback redirect
               window.location.href = "/tenant";
             }
           };
@@ -501,8 +578,11 @@ export default function Auth() {
             console.log("[Auth] Role is tenant, redirecting immediately");
             window.location.href = "/tenant";
           } else {
-            // No role yet - check database but with timeout
-            forceRedirect();
+            // No role yet - wait for session and check database
+            waitForSessionAndRedirect().catch(err => {
+              console.error("[Auth] Redirect error:", err);
+              window.location.href = "/tenant";
+            });
           }
         }
       }

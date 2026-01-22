@@ -33,6 +33,9 @@ verify_jwt = false
 [functions.get-invite-details]
 verify_jwt = false
 
+[functions.manually-confirm-user]
+verify_jwt = false
+
 [functions.stripe-webhook]
 verify_jwt = false
 

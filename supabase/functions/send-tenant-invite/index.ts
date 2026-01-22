@@ -28,28 +28,49 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     
-    // Create client for user auth (uses Authorization header)
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: { Authorization: req.headers.get("Authorization") || "" },
-      },
-    });
-    
-    // Create service role client for admin operations
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
     // Get landlord_id from auth header
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      throw new Error("Authorization header required");
+      return new Response(
+        JSON.stringify({ error: "Authorization header required" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
     
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      throw new Error("Invalid authentication");
+    // Create service role client for admin operations
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false }
+    });
+
+    // Extract token and get user
+    const token = authHeader.replace("Bearer ", "");
+    if (!token || token.length === 0) {
+      return new Response(
+        JSON.stringify({ error: "Invalid authorization token" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
+
+    console.log("Extracting user from token...");
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    if (userError) {
+      console.error("Auth error:", userError);
+      return new Response(
+        JSON.stringify({ error: `Authentication error: ${userError.message}` }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const user = userData.user;
+    if (!user?.email) {
+      console.error("User data missing:", { userData, user });
+      return new Response(
+        JSON.stringify({ error: "User not authenticated" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    console.log("User authenticated:", { userId: user.id, email: user.email });
     const landlordId = user.id;
 
     const { email, fullName, phone, unitId, move_in_date }: InviteRequest = await req.json();
@@ -65,7 +86,7 @@ serve(async (req) => {
       .eq("email", normalizedEmail)
       .maybeSingle();
 
-    let profileId: string;
+    let profileId: string | undefined;
 
     let userAlreadyExists = false;
     let isExistingUser = false;
@@ -159,6 +180,7 @@ serve(async (req) => {
 
       // Create new profile for the tenant if we haven't already
       if (!profileId) {
+        console.log("Creating new profile for tenant:", normalizedEmail);
         const { data: newProfile, error: profileError } = await supabaseAdmin
           .from("profiles")
           .insert({
@@ -170,9 +192,18 @@ serve(async (req) => {
           .select()
           .single();
 
-        if (profileError) throw profileError;
+        if (profileError) {
+          console.error("Error creating profile:", profileError);
+          throw profileError;
+        }
         profileId = newProfile.id;
+        console.log("Profile created:", profileId);
       }
+    }
+
+    if (!profileId) {
+      console.error("Failed to get or create profileId");
+      throw new Error("Failed to create or retrieve tenant profile");
     }
 
     // Get property and unit info for email
@@ -236,6 +267,11 @@ serve(async (req) => {
       // You must verify your own domain at https://resend.com/domains
       // For production: Set RESEND_FROM_EMAIL env var to your verified domain email
       // e.g., "RentFlow <noreply@yourdomain.com>"
+      // RentFlow branding colors: Teal/Blue-green primary
+      const primaryColor = "#2D9B8A"; // Teal - hsl(172 66% 38%)
+      const primaryDark = "#1F7A6B"; // Darker teal
+      const headerGradient = `linear-gradient(135deg, ${primaryColor} 0%, ${primaryDark} 100%)`;
+      
       const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") || "RentFlow <support@payrentflow.com>";
       const { error: emailError } = await resend.emails.send({
         from: fromEmail,
@@ -251,7 +287,7 @@ serve(async (req) => {
           <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
             <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
               <tr>
-                <td style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border-radius: 16px 16px 0 0; padding: 50px 40px; text-align: center;">
+                <td style="background: ${headerGradient}; border-radius: 16px 16px 0 0; padding: 50px 40px; text-align: center;">
                   <h1 style="color: white; margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;">Welcome to RentFlow</h1>
                   <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0; font-size: 16px;">Pay Rent, Stress-Free</p>
                 </td>
@@ -267,7 +303,7 @@ serve(async (req) => {
                         : "You've been invited to join RentFlow as a tenant. We're excited to have you on board!"}
                   </p>
                   ${propertyName || unitNumber || move_in_date ? `
-                  <div style="background-color: #f9fafb; border-left: 4px solid #6366f1; padding: 20px; margin: 24px 0; border-radius: 8px;">
+                  <div style="background-color: #f9fafb; border-left: 4px solid ${primaryColor}; padding: 20px; margin: 24px 0; border-radius: 8px;">
                     ${propertyName ? `<p style="color: #374151; font-size: 15px; margin: 0 0 8px; font-weight: 600;">🏠 Property: ${propertyName}</p>` : ''}
                     ${unitNumber ? `<p style="color: #374151; font-size: 15px; margin: 0 0 8px;">📍 Unit: ${unitNumber}</p>` : ''}
                     ${move_in_date ? `<p style="color: #374151; font-size: 15px; margin: 0;">📅 Move-in Date: ${new Date(move_in_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>` : ''}
@@ -281,7 +317,7 @@ serve(async (req) => {
                   <table width="100%" cellpadding="0" cellspacing="0" style="margin: 30px 0;">
                     <tr>
                       <td align="center">
-                          <a href="${signupUrl}" style="display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px -1px rgba(99, 102, 241, 0.3); transition: all 0.2s;">
+                          <a href="${signupUrl}" style="display: inline-block; background: ${headerGradient}; color: white; text-decoration: none; padding: 16px 40px; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px -1px rgba(45, 155, 138, 0.3); transition: all 0.2s;">
                             ${userAlreadyExists ? "Sign In to Your Account" : "Create Your Account"}
                           </a>
                       </td>

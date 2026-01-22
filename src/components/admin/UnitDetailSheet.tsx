@@ -23,15 +23,22 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Calendar, DollarSign, User, AlertTriangle, Pencil, Check, X } from "lucide-react";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Calendar, DollarSign, User, AlertTriangle, Pencil, Check, X, ChevronsUpDown } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface Tenant {
   id: string;
@@ -64,6 +71,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenantComboboxOpen, setTenantComboboxOpen] = useState(false);
   const [showTenantWarning, setShowTenantWarning] = useState(false);
   const [pendingTenantId, setPendingTenantId] = useState<string>("");
   const isConfirmingRef = useRef(false); // Use ref to track confirmation state synchronously
@@ -81,68 +89,93 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
 
   const fetchTenants = async () => {
     try {
-      // Use the database function to get available tenants (confirmed email, no unit assigned)
-      const { data: availableTenantsData, error: functionError } = await supabase.rpc('get_available_tenants' as any);
+      // Use the database function to get all assigned tenant IDs
+      // This bypasses RLS and can see ALL units across ALL landlords
+      let assignedTenantIds = new Set<string>();
+      
+      try {
+        const { data: assignedTenantIdsData, error: assignedIdsError } = await (supabase.rpc as any)('get_all_assigned_tenant_ids');
 
-      let tenants: Tenant[] = [];
-
-      if (functionError || !availableTenantsData) {
-        console.error("Error fetching available tenants:", functionError);
-        // Fallback to old method if function doesn't exist
-        const { data: allTenants, error: tenantsError } = await supabase
-          .from("profiles")
-          .select("id, full_name, email")
-          .eq("role", "tenant")
-          .order("full_name", { ascending: true, nullsFirst: false });
-
-        if (tenantsError) throw tenantsError;
-
-        const { data: assignedUnits, error: unitsError } = await supabase
-          .from("units")
-          .select("tenant_id")
-          .not("tenant_id", "is", null);
-
-        if (unitsError) throw unitsError;
-
-        const assignedTenantIds = (assignedUnits || [])
-          .map((u) => u.tenant_id)
-          .filter((id): id is string => id !== null);
-
-        tenants = (allTenants || []).filter(
-          (t) => !assignedTenantIds.includes(t.id) || (unit?.tenant_id && t.id === unit.tenant_id)
-        ) as Tenant[];
-      } else {
-        tenants = (availableTenantsData || []) as Tenant[];
-      }
-
-      // If current unit has a tenant, add them to the list so they can be reassigned
-      // (even though they're already assigned, we want to show them in the dropdown)
-      if (unit?.tenant_id) {
-        // Get the current tenant's profile
-        const { data: currentTenantProfile } = await supabase
-          .from("profiles")
-          .select("id, full_name, email")
-          .eq("id", unit.tenant_id)
-          .eq("role", "tenant")
-          .single();
-
-        if (currentTenantProfile) {
-          // Check if this tenant is already in the list (shouldn't be if they're assigned)
-          const isAlreadyInList = tenants.some(t => t.id === currentTenantProfile.id);
+        if (assignedIdsError) {
+          console.error("[UnitDetailSheet] Error fetching assigned tenant IDs from function:", assignedIdsError);
+          console.log("[UnitDetailSheet] Falling back to direct query (RLS-limited - may miss some assignments)");
           
-          if (!isAlreadyInList) {
-            // Add current tenant to the list so they can be reassigned
-            // Note: We assume if they're already assigned, they have confirmed their email
-            tenants = [currentTenantProfile as Tenant, ...tenants];
-          }
+          // Fallback to direct query (will be limited by RLS to current landlord's units only)
+          const { data: assignedUnits } = await supabase
+            .from("units")
+            .select("tenant_id")
+            .not("tenant_id", "is", null);
+
+          (assignedUnits || []).forEach((u: any) => {
+            if (u.tenant_id) {
+              assignedTenantIds.add(String(u.tenant_id));
+            }
+          });
+          console.log("[UnitDetailSheet] Using fallback query (RLS-limited):", Array.from(assignedTenantIds));
+        } else {
+          // Successfully got data from function
+          (assignedTenantIdsData || []).forEach((item: any) => {
+            if (item.tenant_id) {
+              assignedTenantIds.add(String(item.tenant_id));
+            }
+          });
+          console.log("[UnitDetailSheet] Assigned tenant IDs from function:", Array.from(assignedTenantIds));
         }
+      } catch (error) {
+        console.error("[UnitDetailSheet] Exception calling get_all_assigned_tenant_ids:", error);
+        // Continue with empty set - will show all tenants (not ideal but better than crashing)
       }
 
+      console.log("[UnitDetailSheet] Assigned tenant IDs (normalized):", Array.from(assignedTenantIds));
+
+      // Get all tenant profiles
+      const { data: allTenants, error: tenantsError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("role", "tenant")
+        .order("full_name", { ascending: true, nullsFirst: false });
+
+      if (tenantsError) {
+        console.error("[UnitDetailSheet] Error fetching profiles:", tenantsError);
+        throw tenantsError;
+      }
+
+      console.log("[UnitDetailSheet] All tenant profiles:", allTenants);
+
+      // Filter out assigned tenants, but include current unit's tenant if it exists (for reassignment)
+      // Normalize IDs for comparison
+      const currentUnitTenantIdStr = unit?.tenant_id ? String(unit.tenant_id) : null;
+      let tenants: Tenant[] = (allTenants || []).filter((t) => {
+        const tenantIdStr = String(t.id);
+        const isAssigned = assignedTenantIds.has(tenantIdStr);
+        const isCurrentUnitTenant = currentUnitTenantIdStr && tenantIdStr === currentUnitTenantIdStr;
+        
+        if (isAssigned && !isCurrentUnitTenant) {
+          console.log(`[UnitDetailSheet] Filtering out assigned tenant: ${t.email} (${t.id})`);
+        }
+        
+        return !isAssigned || isCurrentUnitTenant;
+      }) as Tenant[];
+
+      console.log("[UnitDetailSheet] Available tenants (including current unit tenant):", tenants);
       setTenants(tenants);
     } catch (error) {
-      console.error("Error fetching tenants:", error);
+      console.error("[UnitDetailSheet] Error fetching tenants:", error);
       toast.error("Failed to load tenants");
     }
+  };
+
+  // Get selected tenant display name
+  const getSelectedTenantDisplay = () => {
+    const currentTenantId = formData.tenant_id || "";
+    if (!currentTenantId || currentTenantId === "__none__") {
+      return "No tenant";
+    }
+    const tenant = tenants.find((t) => t.id === currentTenantId);
+    if (!tenant) return "Select a tenant";
+    return tenant.full_name 
+      ? `${tenant.full_name} (${tenant.email})`
+      : tenant.email;
   };
 
   useEffect(() => {
@@ -358,6 +391,35 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         }
       }
 
+      // Auto-generate statement if tenant was just assigned with move-in date
+      const wasTenantJustAssigned = (!unit.tenant_id || unit.tenant_id === "") && updateData.tenant_id;
+      if (wasTenantJustAssigned && formData.move_in_date) {
+        const today = new Date();
+        const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+        const currentYear = today.getFullYear();
+        const periodMonth = `${currentMonth}/${currentYear}`;
+        
+        console.log("Tenant just assigned with move-in date, generating statement for:", periodMonth);
+        try {
+          const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
+            body: { 
+              unit_id: unit.id, 
+              period_month: periodMonth 
+            }
+          });
+          
+          if (generateError) {
+            console.error("Error generating statement:", generateError);
+            // Don't show error to user - statement might already exist
+          } else if (generatedStatement) {
+            console.log("Statement generated successfully:", generatedStatement);
+          }
+        } catch (error) {
+          console.error("Exception generating statement:", error);
+          // Don't show error to user - statement might already exist
+        }
+      }
+
       // Send notification if there are changes and tenant is assigned
       if (changes.length > 0 && unit.tenant_id) {
         // Get property info for the email
@@ -433,59 +495,93 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
             {/* Assign Tenant */}
             <div className="space-y-2">
               <Label>Assign Tenant (optional)</Label>
-              <Select 
-                value={formData.tenant_id || "__none__"} 
-                onValueChange={(value) => {
-                  console.log("Select onValueChange called:", value);
-                  const newTenantId = value === "__none__" ? "" : value;
-                  const currentFormTenantId = formData.tenant_id || "";
-                  const currentUnitTenantId = unit.tenant_id || "";
-                  
-                  console.log("Tenant selection:", {
-                    newTenantId,
-                    currentFormTenantId,
-                    currentUnitTenantId,
-                    willShowDialog: newTenantId !== currentUnitTenantId
-                  });
-                  
-                  // If selecting the same tenant that's already in formData, no warning needed
-                  if (newTenantId === currentFormTenantId) {
-                    console.log("Same tenant selected as in formData, skipping dialog");
-                    return;
-                  }
-                  
-                  // Show warning dialog immediately when tenant is selected (if different from original unit tenant)
-                  if (newTenantId !== currentUnitTenantId) {
-                    console.log("Setting pending tenant and showing dialog");
-                    setPendingTenantId(newTenantId);
-                    setShowTenantWarning(true);
-                    console.log("Dialog state set to true");
-                  } else {
-                    // If selecting back to the original tenant, just update formData directly
-                    console.log("Selecting back to original tenant, updating formData directly");
-                    setFormData((prev) => ({ ...prev, tenant_id: newTenantId }));
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a tenant" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No tenant</SelectItem>
-                  {tenants.map((tenant) => (
-                    <SelectItem key={tenant.id} value={tenant.id}>
-                      {tenant.full_name 
-                        ? `${tenant.full_name} (${tenant.email})`
-                        : tenant.email}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {tenants.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No tenants available. Add tenants in the Tenants tab first.
-                </p>
-              )}
+              <Popover open={tenantComboboxOpen} onOpenChange={setTenantComboboxOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={tenantComboboxOpen}
+                    className="w-full justify-between"
+                    disabled={saving}
+                  >
+                    {getSelectedTenantDisplay()}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search by email or name..." />
+                    <CommandList>
+                      <CommandEmpty>
+                        {tenants.length === 0
+                          ? "No available tenants. All tenants are assigned to units."
+                          : "No tenants found."}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value="__none__"
+                          onSelect={() => {
+                            const currentUnitTenantId = unit.tenant_id || "";
+                            if (currentUnitTenantId) {
+                              setPendingTenantId("");
+                              setShowTenantWarning(true);
+                            } else {
+                              setFormData((prev) => ({ ...prev, tenant_id: "" }));
+                            }
+                            setTenantComboboxOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              (!formData.tenant_id || formData.tenant_id === "__none__") ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          No tenant
+                        </CommandItem>
+                        {tenants.map((tenant) => {
+                          const currentFormTenantId = formData.tenant_id || "";
+                          const currentUnitTenantId = unit.tenant_id || "";
+                          return (
+                            <CommandItem
+                              key={tenant.id}
+                              value={`${tenant.full_name || ""} ${tenant.email}`}
+                              onSelect={() => {
+                                const newTenantId = tenant.id;
+                                // If selecting the same tenant that's already in formData, no warning needed
+                                if (newTenantId === currentFormTenantId) {
+                                  setTenantComboboxOpen(false);
+                                  return;
+                                }
+                                
+                                // Show warning dialog if different from original unit tenant
+                                if (newTenantId !== currentUnitTenantId) {
+                                  setPendingTenantId(newTenantId);
+                                  setShowTenantWarning(true);
+                                } else {
+                                  // If selecting back to the original tenant, just update formData directly
+                                  setFormData((prev) => ({ ...prev, tenant_id: newTenantId }));
+                                }
+                                setTenantComboboxOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  formData.tenant_id === tenant.id ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {tenant.full_name 
+                                ? `${tenant.full_name} (${tenant.email})`
+                                : tenant.email}
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               {/* Move In Date - only show when tenant is assigned */}
               {formData.tenant_id && formData.tenant_id !== "__none__" && (
                 <div className="grid gap-2 pt-2">

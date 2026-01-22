@@ -41,6 +41,7 @@ interface UnitData {
   late_fee_type?: string;
   late_fee_amount?: number;
   first_month_paid?: boolean;
+  move_in_date?: string | null;
   property: {
     name: string;
     address: string;
@@ -84,6 +85,32 @@ export default function TenantDashboard() {
   const [paymentStreak, setPaymentStreak] = useState<number | null>(null);
   const [remainingBalance, setRemainingBalance] = useState<number | null>(null);
 
+  // Helper function to calculate pro-rated rent (same logic as generate-statement)
+  const calculateProratedRent = useCallback((moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
+    if (!moveInDate) return monthlyRent;
+    
+    const [statementMonth, statementYear] = periodMonth.split('/').map(Number);
+    const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
+    const statementMonthEnd = new Date(statementYear, statementMonth, 0); // Last day of month
+    
+    // Check if move-in is in this statement month
+    if (moveInDate < statementMonthStart || moveInDate > statementMonthEnd) {
+      return monthlyRent; // Not the move-in month, use full rent
+    }
+    
+    // Calculate days in month and days from move-in to end of month
+    const daysInMonth = statementMonthEnd.getDate();
+    const moveInDay = moveInDate.getDate();
+    const daysRemaining = daysInMonth - moveInDay + 1; // +1 to include move-in day
+    
+    if (daysRemaining === daysInMonth) {
+      return monthlyRent; // Moved in on 1st, full month
+    }
+    
+    const proratedAmount = (monthlyRent / daysInMonth) * daysRemaining;
+    return Math.round(proratedAmount * 100) / 100;
+  }, []);
+
   const fetchTenantData = useCallback(async () => {
     try {
       if (!user?.id) {
@@ -94,13 +121,38 @@ export default function TenantDashboard() {
       console.log("[TenantDashboard] Fetching data for user:", user.id);
 
       // Fetch tenant profile
+      // Use auth.getUser() to get profile data from auth metadata as fallback
+      const { data: { user: authUserData } } = await supabase.auth.getUser();
+      console.log("[TenantDashboard] Auth user data:", authUserData);
+      
       let { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("full_name, email, id")
+        .select("full_name, email, id, role")
         .eq("id", user.id)
         .single();
       
-      console.log("[TenantDashboard] Profile data:", { profileData, profileError });
+      console.log("[TenantDashboard] Profile data:", { 
+        profileData, 
+        profileError,
+        errorCode: profileError?.code,
+        errorMessage: profileError?.message,
+        errorDetails: profileError?.details,
+        errorHint: profileError?.hint
+      });
+      
+      // If profile fetch fails with 406 or RLS error, try using auth metadata
+      if (profileError && (profileError.code === 'PGRST301' || profileError.message?.includes('permission') || profileError.code === '406')) {
+        console.warn("[TenantDashboard] Profile fetch blocked by RLS, using auth metadata");
+        if (authUserData) {
+          profileData = {
+            id: authUserData.id,
+            email: authUserData.email || user.email || '',
+            full_name: authUserData.user_metadata?.full_name || null,
+            role: authUserData.user_metadata?.role || 'tenant'
+          };
+          console.log("[TenantDashboard] Using auth metadata as profile:", profileData);
+        }
+      }
       
       // If no profile exists, try to create one from auth user data
       if (!profileData && user.email) {
@@ -108,52 +160,66 @@ export default function TenantDashboard() {
         const { data: authUser } = await supabase.auth.getUser();
         
         if (authUser?.user) {
-          // Try to insert, but handle conflict if profile already exists
+          // First, try a simple insert (will fail if profile exists, which is fine)
           const { data: newProfile, error: createError } = await supabase
             .from("profiles")
-            .upsert({
+            .insert({
               id: user.id,
               email: user.email || authUser.user.email || "",
               full_name: authUser.user.user_metadata?.full_name || null,
               phone: authUser.user.user_metadata?.phone || null,
               role: authUser.user.user_metadata?.role || "tenant",
-            }, {
-              onConflict: 'id'
             })
             .select()
             .single();
           
           if (newProfile && !createError) {
-            console.log("[TenantDashboard] Profile created/updated successfully:", newProfile);
+            console.log("[TenantDashboard] Profile created successfully:", newProfile);
             profileData = newProfile;
             setTenantProfile(newProfile);
           } else {
-            console.error("[TenantDashboard] Failed to create profile:", createError);
-            // Try to fetch again in case it was created by another process
-            const { data: retryProfile } = await supabase
+            // If insert failed (likely because profile already exists), try to fetch it
+            console.log("[TenantDashboard] Insert failed (profile may already exist), fetching:", createError);
+            
+            // Wait a moment for trigger to create profile (if it hasn't yet)
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            const { data: retryProfile, error: fetchError } = await supabase
               .from("profiles")
-              .select("full_name, email, id")
+              .select("full_name, email, id, role")
               .eq("id", user.id)
               .single();
             
-            if (retryProfile) {
-              console.log("[TenantDashboard] Profile found on retry:", retryProfile);
+            if (retryProfile && !fetchError) {
+              console.log("[TenantDashboard] Profile found after insert attempt:", retryProfile);
               profileData = retryProfile;
               setTenantProfile(retryProfile);
             } else {
-              toast.error("Profile creation failed. Please contact support.");
+              console.warn("[TenantDashboard] Could not create or fetch profile:", { createError, fetchError });
+              // Profile might be created by database trigger - continue without showing error
+              // The profile will be available on next page load
             }
           }
         }
       } else if (profileData) {
         setTenantProfile(profileData);
-      } else if (!user.email) {
-        console.error("[TenantDashboard] No email available for user:", user.id);
-        toast.error("User email not found. Please contact support.");
       }
 
       // Fetch tenant's unit with property info
       console.log("[TenantDashboard] Querying units with tenant_id:", user.id);
+      console.log("[TenantDashboard] User object:", { id: user.id, email: user.email });
+      
+      // First, let's check what auth.uid() returns
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      console.log("[TenantDashboard] Auth user ID:", authUser?.id);
+      console.log("[TenantDashboard] ID comparison:", {
+        useAuthId: user.id,
+        authUserId: authUser?.id,
+        match: user.id === authUser?.id,
+        typeUseAuth: typeof user.id,
+        typeAuth: typeof authUser?.id
+      });
+      
       const { data: unitData, error: unitError } = await supabase
         .from("units")
         .select(`
@@ -168,6 +234,7 @@ export default function TenantDashboard() {
           late_fee_type,
           late_fee_amount,
           first_month_paid,
+          move_in_date,
           tenant_id,
           property:properties (
             name,
@@ -177,7 +244,95 @@ export default function TenantDashboard() {
         .eq("tenant_id", user.id)
         .maybeSingle();
 
-      console.log("[TenantDashboard] Unit query result:", { unitData, unitError });
+      console.log("[TenantDashboard] Unit query result:", { 
+        unitData, 
+        unitError,
+        hasUnit: !!unitData,
+        tenantId: unitData?.tenant_id,
+        userId: user.id,
+        errorMessage: unitError?.message,
+        errorDetails: unitError?.details,
+        errorHint: unitError?.hint,
+        errorCode: unitError?.code
+      });
+      
+      // If query failed, try without the filter to see if RLS is blocking
+      if (unitError || !unitData) {
+        console.log("[TenantDashboard] Query failed or no data, checking RLS...");
+        
+        // Check if auth.uid() matches our user.id
+        const { data: { user: currentAuthUser } } = await supabase.auth.getUser();
+        console.log("[TenantDashboard] Current auth.uid():", currentAuthUser?.id);
+        console.log("[TenantDashboard] useAuth user.id:", user.id);
+        console.log("[TenantDashboard] IDs match:", currentAuthUser?.id === user.id);
+        
+        // Try a simpler query to see if we can access units at all
+        const { data: allUnits, error: allUnitsError } = await supabase
+          .from("units")
+          .select("id, tenant_id, unit_number")
+          .limit(10);
+        
+        console.log("[TenantDashboard] All units query (to check RLS):", {
+          allUnits,
+          allUnitsError,
+          count: allUnits?.length,
+          errorCode: allUnitsError?.code,
+          errorMessage: allUnitsError?.message
+        });
+        
+        // If RLS is blocking everything, the issue is likely:
+        // 1. The tenant_id in units table doesn't match auth.uid()
+        // 2. Or there's a profile/RLS issue preventing auth.uid() from working
+        if (allUnitsError || (allUnits && allUnits.length === 0)) {
+          console.error("[TenantDashboard] ⚠️ RLS is blocking all unit access!");
+          console.error("[TenantDashboard] This suggests:");
+          console.error("  1. tenant_id in units table doesn't match auth.uid()");
+          console.error("  2. Or profile doesn't exist/RLS is blocking profile access");
+          console.error("[TenantDashboard] auth.uid() should be:", currentAuthUser?.id);
+          console.error("[TenantDashboard] Check units table - tenant_id should match:", currentAuthUser?.id);
+          console.error("[TenantDashboard] 🔧 FIX: Run the SQL script: scripts/fix-tenant-assignment.sql");
+          console.error("[TenantDashboard] 🔧 Or update units table: UPDATE units SET tenant_id = '", currentAuthUser?.id, "' WHERE unit_number = '003';");
+          
+          // Show user-friendly error
+          toast.error(
+            `Unit assignment mismatch detected. Your user ID (${currentAuthUser?.id?.substring(0, 8)}...) doesn't match the tenant_id in the database. Please contact support.`,
+            { duration: 10000 }
+          );
+        }
+        
+        // Check if any unit has our tenant_id (if we got any results)
+        if (allUnits && allUnits.length > 0) {
+          const matchingUnit = allUnits.find((u: any) => {
+            const matches = u.tenant_id === user.id || u.tenant_id === currentAuthUser?.id;
+            console.log("[TenantDashboard] Checking unit:", {
+              unitId: u.id,
+              unitTenantId: u.tenant_id,
+              useAuthId: user.id,
+              authUid: currentAuthUser?.id,
+              matchesUseAuth: u.tenant_id === user.id,
+              matchesAuthUid: u.tenant_id === currentAuthUser?.id,
+              matches: matches
+            });
+            return matches;
+          });
+          console.log("[TenantDashboard] Found matching unit in all units:", matchingUnit);
+          if (matchingUnit && !unitData) {
+            console.error("[TenantDashboard] RLS ISSUE: Unit exists with matching tenant_id but RLS is blocking it!");
+            console.error("[TenantDashboard] Unit tenant_id:", matchingUnit.tenant_id, "User ID:", user.id, "Match:", matchingUnit.tenant_id === user.id);
+          }
+        }
+      }
+      
+      // If no unit found and there's an error, log it for debugging
+      if (unitError) {
+        console.error("[TenantDashboard] Error fetching unit:", unitError);
+        console.error("[TenantDashboard] Error details:", {
+          message: unitError.message,
+          details: unitError.details,
+          hint: unitError.hint,
+          code: unitError.code
+        });
+      }
 
       // If no unit found, try to find by email as fallback
       if (!unitData && profileData?.email) {
@@ -495,11 +650,41 @@ export default function TenantDashboard() {
               }
               return sum;
             }, 0);
-            const roundedTotal = Math.round(totalBasePaid * 100) / 100;
+            let finalTotal = totalBasePaid;
+            
+            // If first_month_paid is true and we're in the move-in month, add the pro-rated amount
+            if (unitData.first_month_paid && unitData.move_in_date) {
+              const currentMonth = format(new Date(), "MM/yyyy");
+              const moveInDate = new Date(unitData.move_in_date);
+              const moveInMonth = format(moveInDate, "MM/yyyy");
+              
+              // If we're in the move-in month, add the pro-rated amount as "paid"
+              if (currentMonth === moveInMonth) {
+                const proratedAmount = calculateProratedRent(moveInDate, currentMonth, unitData.monthly_rent);
+                finalTotal += proratedAmount;
+                console.log("[Total Paid This Year] Added first_month_paid pro-rated amount:", proratedAmount);
+              }
+            }
+            
+            const roundedTotal = Math.round(finalTotal * 100) / 100;
             console.log("[Total Paid This Year] Final total:", roundedTotal);
             setTotalPaid(roundedTotal);
           } else {
-            setTotalPaid(0);
+            // No payments, but check if first_month_paid should be counted
+            let total = 0;
+            if (unitData.first_month_paid && unitData.move_in_date) {
+              const currentMonth = format(new Date(), "MM/yyyy");
+              const moveInDate = new Date(unitData.move_in_date);
+              const moveInMonth = format(moveInDate, "MM/yyyy");
+              
+              // If we're in the move-in month, add the pro-rated amount as "paid"
+              if (currentMonth === moveInMonth) {
+                const proratedAmount = calculateProratedRent(moveInDate, currentMonth, unitData.monthly_rent);
+                total = proratedAmount;
+                console.log("[Total Paid This Year] First month paid, no payments yet, total:", total);
+              }
+            }
+            setTotalPaid(total);
           }
 
           // Calculate remaining balance for current statement after partial payments
@@ -615,7 +800,26 @@ export default function TenantDashboard() {
         // Show helpful error message
         if (profileData) {
           console.log("[TenantDashboard] Tenant profile exists but no unit assigned. Profile:", profileData);
-          toast.error("No unit assigned. Please contact your landlord to assign you to a unit.");
+          // Check if there are any units with this tenant_id (bypassing RLS check)
+          // This helps debug if it's an RLS issue
+          const { data: debugUnits } = await supabase
+            .from("units")
+            .select("id, tenant_id, unit_number")
+            .eq("tenant_id", user.id);
+          
+          console.log("[TenantDashboard] Debug: All units with this tenant_id:", debugUnits);
+          
+          if (debugUnits && debugUnits.length > 0) {
+            console.error("[TenantDashboard] WARNING: Units found but RLS might be blocking access!");
+            toast.error("Unit found but access denied. Please refresh the page or contact support.");
+          } else {
+            toast.error("No unit assigned. Please contact your landlord to assign you to a unit.");
+          }
+        } else {
+          // Profile might be created by database trigger - don't show alarming error
+          // Just log and let the refresh button handle it
+          console.warn("[TenantDashboard] Profile not yet available - may be created by database trigger");
+          // Don't show toast - the refresh banner is enough
         }
       }
     } catch (error) {
@@ -707,6 +911,21 @@ export default function TenantDashboard() {
   const getNextDueDate = () => {
     if (!unit) return null;
     const today = new Date();
+    const currentMonth = format(today, "MM/yyyy");
+    
+    // Check if we're in the move-in month
+    if (unit.move_in_date) {
+      const moveInDate = new Date(unit.move_in_date);
+      const moveInMonth = format(moveInDate, "MM/yyyy");
+      
+      // If we're in the move-in month and first month is NOT paid, due date is move-in date
+      if (currentMonth === moveInMonth && !unit.first_month_paid) {
+        // If move-in date is in the past, rent is due now (today)
+        return moveInDate < today ? today : moveInDate;
+      }
+    }
+    
+    // For non-move-in months or if first month is paid, use standard due day
     const dueDate = new Date(today.getFullYear(), today.getMonth(), unit.due_day);
     if (dueDate < today) {
       dueDate.setMonth(dueDate.getMonth() + 1);
@@ -721,26 +940,57 @@ export default function TenantDashboard() {
   };
 
   const isPastDue = () => {
-    if (!unit || !currentStatement) return false;
-    if (currentStatement.status === "paid") return false;
+    if (!unit) return false;
     
     const today = startOfDay(new Date());
-    const [month, year] = currentStatement.period_month.split('/').map(Number);
-    const dueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    const currentMonth = format(new Date(), "MM/yyyy");
+    const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
     
-    // If the due date hasn't arrived yet, it's not past due (regardless of status)
+    // Check if we're in the move-in month
+    const isMoveInMonth = unit.move_in_date && 
+      currentYear === new Date(unit.move_in_date).getFullYear() && 
+      currentMonthNum === new Date(unit.move_in_date).getMonth() + 1;
+    
+    // If first_month_paid is true and we're in move-in month, account is not past due
+    if (isMoveInMonth && unit.first_month_paid) {
+      return false;
+    }
+    
+    // If no statement exists but we're in move-in month, check if move-in date has passed
+    if (!currentStatement && isMoveInMonth && unit.move_in_date) {
+      const moveInDate = startOfDay(new Date(unit.move_in_date));
+      // If move-in date has passed, account is past due
+      return today > moveInDate;
+    }
+    
+    // If no statement and not move-in month, can't determine past due status
+    if (!currentStatement) return false;
+    
+    if (currentStatement.status === "paid") return false;
+    
+    const [month, year] = currentStatement.period_month.split('/').map(Number);
+    
+    let dueDate: Date;
+    
+    if (isMoveInMonth && unit.move_in_date) {
+      // For move-in month: rent is due on move-in date (or today if move-in date is in the past)
+      const moveInDate = startOfDay(new Date(unit.move_in_date));
+      // Due date is the move-in date (or today if already moved in)
+      dueDate = moveInDate > today ? moveInDate : today;
+    } else {
+      // For non-move-in months: use standard due day
+      dueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    }
+    
+    // If the due date hasn't arrived yet, it's not past due
     if (today < dueDate) {
       return false;
     }
     
     // If first_month_paid is true, check if we're showing a future month's statement
     if (unit.first_month_paid) {
-      const currentMonth = format(new Date(), "MM/yyyy");
-      const [statementMonth, statementYear] = currentStatement.period_month.split('/').map(Number);
-      const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
-      
       // If the statement is for a future month, it's not past due
-      if (statementYear > currentYear || (statementYear === currentYear && statementMonth > currentMonthNum)) {
+      if (year > currentYear || (year === currentYear && month > currentMonthNum)) {
         return false;
       }
     }
@@ -761,8 +1011,24 @@ export default function TenantDashboard() {
     
     // Calculate due date for the current statement's period
     const today = startOfDay(new Date());
-    const [month, year] = currentStatement.period_month.split('/');
-    const statementDueDate = startOfDay(new Date(parseInt(year), parseInt(month) - 1, unit.due_day));
+    const [month, year] = currentStatement.period_month.split('/').map(Number);
+    const currentMonth = format(new Date(), "MM/yyyy");
+    const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+    
+    // Check if this is the move-in month
+    const isMoveInMonth = unit.move_in_date && 
+      year === currentYear && 
+      month === currentMonthNum;
+    
+    let statementDueDate: Date;
+    if (isMoveInMonth && unit.move_in_date) {
+      // For move-in month: due date is move-in date (or today if already moved in)
+      const moveInDate = startOfDay(new Date(unit.move_in_date));
+      statementDueDate = moveInDate > today ? moveInDate : today;
+    } else {
+      // Standard due date
+      statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    }
     
     // Calculate days until due date (can be negative if past due, but we already checked isPastDue)
     const daysUntilDue = differenceInDays(statementDueDate, today);
@@ -807,8 +1073,26 @@ export default function TenantDashboard() {
   const daysUntilDue = getDaysUntilDue();
   const nextDueDate = getNextDueDate();
   const pastDue = isPastDue();
-  // Use remaining balance if available, otherwise fall back to total_due
-  const rentDue = remainingBalance !== null ? remainingBalance : (currentStatement?.total_due || unit?.monthly_rent || 0);
+  
+  // Calculate rent due amount
+  // Use remaining balance if available, otherwise use statement total_due, or calculate pro-rated if no statement
+  let rentDue = 0;
+  if (remainingBalance !== null) {
+    rentDue = remainingBalance;
+  } else if (currentStatement?.total_due) {
+    rentDue = currentStatement.total_due;
+  } else if (unit) {
+    // No statement exists - calculate pro-rated amount if move-in date exists
+    const currentMonth = format(new Date(), "MM/yyyy");
+    if (unit.move_in_date) {
+      const moveInDate = new Date(unit.move_in_date);
+      const proratedAmount = calculateProratedRent(moveInDate, currentMonth, unit.monthly_rent);
+      rentDue = proratedAmount;
+    } else {
+      rentDue = unit.monthly_rent;
+    }
+  }
+  
   const canPay = canMakePayment();
   
   // Calculate days until payment is available (for button text)
@@ -816,8 +1100,25 @@ export default function TenantDashboard() {
     if (!currentStatement || !unit || currentStatement.status === "paid") return null;
     if (pastDue) return null; // Can always pay if past due
     const today = startOfDay(new Date());
-    const [month, year] = currentStatement.period_month.split('/');
-    const statementDueDate = startOfDay(new Date(parseInt(year), parseInt(month) - 1, unit.due_day));
+    const [month, year] = currentStatement.period_month.split('/').map(Number);
+    const currentMonth = format(new Date(), "MM/yyyy");
+    const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+    
+    // Check if this is the move-in month
+    const isMoveInMonth = unit.move_in_date && 
+      year === currentYear && 
+      month === currentMonthNum;
+    
+    let statementDueDate: Date;
+    if (isMoveInMonth && unit.move_in_date) {
+      // For move-in month: due date is move-in date (or today if already moved in)
+      const moveInDate = startOfDay(new Date(unit.move_in_date));
+      statementDueDate = moveInDate > today ? moveInDate : today;
+    } else {
+      // Standard due date
+      statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    }
+    
     const daysUntilDue = differenceInDays(statementDueDate, today);
     return daysUntilDue > 3 ? daysUntilDue - 3 : null;
   };
@@ -883,8 +1184,9 @@ export default function TenantDashboard() {
   if (loading) {
     return (
       <TenantLayout>
-        <div className="flex items-center justify-center h-64">
+        <div className="flex flex-col items-center justify-center h-64 gap-4">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+          <p className="text-sm text-muted-foreground">Loading your dashboard...</p>
         </div>
       </TenantLayout>
     );
@@ -893,6 +1195,27 @@ export default function TenantDashboard() {
   return (
     <TenantLayout>
       <div className="space-y-8 animate-fade-in">
+        {/* Refresh button for debugging */}
+        {!unit && (
+          <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg border border-border">
+            <div>
+              <p className="text-sm font-medium">No unit assigned</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                If your landlord just assigned you to a unit, try refreshing the page.
+              </p>
+            </div>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => {
+                setLoading(true);
+                fetchTenantData();
+              }}
+            >
+              Refresh
+            </Button>
+          </div>
+        )}
         {/* Hero Payment Card */}
         <Card className={`relative overflow-hidden p-8 ${pastDue ? 'bg-destructive' : 'bg-primary'}`}>
           <div className="relative z-10">

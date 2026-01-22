@@ -178,11 +178,30 @@ serve(async (req) => {
     }
 
     // Calculate late fee if overdue
+    // IMPORTANT: No late fees for move-in month (first month) as per user requirement
     const today = new Date()
     const [month, year] = period_month.split('/')
-    const dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day)
+    
+    // Check if this is the move-in month
+    const isMoveInMonth = moveInDateObj && 
+      parseInt(year) === moveInDateObj.getFullYear() &&
+      parseInt(month) === moveInDateObj.getMonth() + 1;
+    
+    // For move-in month, use move-in date as due date; otherwise use standard due day
+    let dueDate: Date;
+    if (isMoveInMonth && moveInDateObj) {
+      // Rent is due on move-in date (or today if already moved in)
+      dueDate = moveInDateObj > today ? moveInDateObj : today;
+    } else {
+      // Standard due date
+      dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day)
+    }
 
-    if (today > dueDate) {
+    // Skip late fees entirely for move-in month (first month)
+    if (isMoveInMonth) {
+      console.log(`Skipping late fees for move-in month ${period_month} - first month has no late fees`);
+      lateFee = 0;
+    } else if (today > dueDate) {
       const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
       const allowSplitPayment = Boolean(unit.allow_split_payment)
 
@@ -234,6 +253,19 @@ serve(async (req) => {
     if (existingStatement) {
       // Update existing statement
       console.log(`Updating existing statement ${existingStatement.id}`);
+      
+      // Determine status based on due date (accounting for move-in month)
+      let updateStatus: string;
+      if (isMoveInMonth && unit.first_month_paid) {
+        updateStatus = 'paid';
+      } else if (isMoveInMonth) {
+        // Move-in month: due on move-in date
+        updateStatus = today > moveInDateObj! ? 'overdue' : 'unpaid';
+      } else {
+        // Standard month: use standard due date
+        updateStatus = today > dueDate ? 'overdue' : 'unpaid';
+      }
+      
       const { data, error } = await supabaseClient
         .from('statements')
         .update({
@@ -241,7 +273,7 @@ serve(async (req) => {
           additional_fees: additionalFees,
           late_fee: lateFee,
           total_due: totalDue,
-          status: today > dueDate ? 'overdue' : 'unpaid'
+          status: updateStatus
         })
         .eq('id', existingStatement.id)
         .select()
@@ -257,18 +289,22 @@ serve(async (req) => {
       console.log("Creating new statement");
       
       // Determine initial status
+      // For move-in month: rent is due on move-in date, so if move-in date has passed, it's overdue
       // If first_month_paid is true and this is the move-in month, mark as paid
-      let initialStatus = today > dueDate ? 'overdue' : 'unpaid';
-      if (unit.first_month_paid && moveInDateObj) {
-        const [statementMonth, statementYear] = period_month.split('/').map(Number);
-        const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
-        const statementMonthEnd = new Date(statementYear, statementMonth, 0);
-        
-        // Check if this is the move-in month
-        if (moveInDateObj >= statementMonthStart && moveInDateObj <= statementMonthEnd) {
-          initialStatus = 'paid';
-          console.log(`Marking statement as paid - first month paid and this is the move-in month`);
-        }
+      let initialStatus: string;
+      if (isMoveInMonth && unit.first_month_paid) {
+        // First month paid - mark as paid
+        initialStatus = 'paid';
+        console.log(`Marking statement as paid - first month paid and this is the move-in month`);
+      } else if (isMoveInMonth) {
+        // Move-in month, first month NOT paid - due on move-in date
+        // If move-in date has passed, it's overdue
+        initialStatus = today > moveInDateObj! ? 'overdue' : 'unpaid';
+        console.log(`Move-in month statement - due date: ${moveInDateObj?.toISOString()}, status: ${initialStatus}`);
+      } else {
+        // Standard month - use standard due date logic
+        const standardDueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+        initialStatus = today > standardDueDate ? 'overdue' : 'unpaid';
       }
       
       const { data, error } = await supabaseClient

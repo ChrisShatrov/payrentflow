@@ -19,9 +19,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Plus, Check, ChevronsUpDown } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface Tenant {
   id: string;
@@ -38,6 +52,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenantComboboxOpen, setTenantComboboxOpen] = useState(false);
 
   const [unitNumber, setUnitNumber] = useState("");
   const [tenantId, setTenantId] = useState<string>("");
@@ -58,38 +73,92 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
 
   const fetchTenants = async () => {
     try {
-      // Use the database function to get only tenants with confirmed emails and no unit assigned
-      const { data, error } = await supabase.rpc('get_available_tenants' as any);
+      // Use the database function to get all assigned tenant IDs
+      // This bypasses RLS and can see ALL units across ALL landlords
+      let assignedTenantIds = new Set<string>();
+      
+      try {
+        const { data: assignedTenantIdsData, error: assignedIdsError } = await (supabase.rpc as any)('get_all_assigned_tenant_ids');
 
-      if (error) {
-        console.error("Error fetching available tenants:", error);
-        // Fallback: try the old method if function doesn't exist
-        const { data: assignedUnits } = await supabase
-          .from("units")
-          .select("tenant_id")
-          .not("tenant_id", "is", null);
+        if (assignedIdsError) {
+          console.error("[AddUnitDialog] Error fetching assigned tenant IDs from function:", assignedIdsError);
+          console.log("[AddUnitDialog] Falling back to direct query (RLS-limited - may miss some assignments)");
+          
+          // Fallback to direct query (will be limited by RLS to current landlord's units only)
+          const { data: assignedUnits } = await supabase
+            .from("units")
+            .select("tenant_id")
+            .not("tenant_id", "is", null);
 
-        const assignedTenantIds = (assignedUnits || []).map((u) => u.tenant_id);
+          (assignedUnits || []).forEach((u: any) => {
+            if (u.tenant_id) {
+              assignedTenantIds.add(String(u.tenant_id));
+            }
+          });
+          console.log("[AddUnitDialog] Using fallback query (RLS-limited):", Array.from(assignedTenantIds));
+        } else {
+          // Successfully got data from function
+          (assignedTenantIdsData || []).forEach((item: any) => {
+            if (item.tenant_id) {
+              assignedTenantIds.add(String(item.tenant_id));
+            }
+          });
+          console.log("[AddUnitDialog] Assigned tenant IDs from function:", Array.from(assignedTenantIds));
+        }
+      } catch (error) {
+        console.error("[AddUnitDialog] Exception calling get_all_assigned_tenant_ids:", error);
+        // Continue with empty set - will show all tenants (not ideal but better than crashing)
+      }
 
-        const { data: profilesData, error: profilesError } = await supabase
-          .from("profiles")
-          .select("id, full_name, email")
-          .eq("role", "tenant");
+      console.log("[AddUnitDialog] Assigned tenant IDs (normalized):", Array.from(assignedTenantIds));
+      console.log("[AddUnitDialog] Total assigned tenants:", assignedTenantIds.size);
 
-        if (profilesError) throw profilesError;
+      // Get all tenant profiles
+      const { data: profilesData, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("role", "tenant")
+        .order("full_name", { ascending: true, nullsFirst: false });
 
-        const availableTenants = (profilesData || []).filter(
-          (t) => !assignedTenantIds.includes(t.id)
-        );
-
-        setTenants(availableTenants);
+      if (profilesError) {
+        console.error("[AddUnitDialog] Error fetching profiles:", profilesError);
+        setTenants([]);
         return;
       }
 
-      setTenants(data || []);
+      console.log("[AddUnitDialog] All tenant profiles:", profilesData);
+      console.log("[AddUnitDialog] Total tenant profiles:", profilesData?.length || 0);
+
+      // Filter out assigned tenants - normalize IDs for comparison
+      const availableTenants = (profilesData || []).filter((t) => {
+        const tenantIdStr = String(t.id);
+        const isAssigned = assignedTenantIds.has(tenantIdStr);
+        if (isAssigned) {
+          console.log(`[AddUnitDialog] Filtering out assigned tenant: ${t.email} (${t.id})`);
+        }
+        return !isAssigned;
+      });
+
+      console.log("[AddUnitDialog] Available (unassigned) tenants:", availableTenants);
+      console.log("[AddUnitDialog] Total available tenants:", availableTenants.length);
+      
+      setTenants(availableTenants);
     } catch (error) {
-      console.error("Error fetching tenants:", error);
+      console.error("[AddUnitDialog] Error fetching tenants:", error);
+      setTenants([]);
     }
+  };
+
+  // Get selected tenant display name
+  const getSelectedTenantDisplay = () => {
+    if (!tenantId || tenantId === "__none__") {
+      return "No tenant";
+    }
+    const tenant = tenants.find((t) => t.id === tenantId);
+    if (!tenant) return "Select a tenant";
+    return tenant.full_name 
+      ? `${tenant.full_name} (${tenant.email})`
+      : tenant.email;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -111,9 +180,17 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
       return;
     }
 
+    // Validate move-in date if tenant is assigned
+    if (tenantId && tenantId !== "__none__") {
+      if (!moveInDate) {
+        toast.error("Please enter a move-in date when assigning a tenant");
+        return;
+      }
+    }
+
     setLoading(true);
     try {
-      const { error } = await supabase.from("units").insert({
+      const { data: newUnit, error } = await supabase.from("units").insert({
         property_id: propertyId,
         unit_number: unitNumber.trim(),
         tenant_id: tenantId === "__none__" ? null : tenantId || null,
@@ -123,11 +200,39 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
         split_payment_fee: allowSplitPayment ? parseFloat(splitPaymentFee) || 30.00 : null,
         late_fee_amount: parseFloat(lateFeeAmount) || 0,
         daily_late_fee: parseFloat(dailyLateFee) || 0,
-        move_in_date: moveInDate || null,
+        move_in_date: tenantId && tenantId !== "__none__" ? moveInDate : null,
         first_month_paid: tenantId && tenantId !== "__none__" ? firstMonthPaid : false,
-      });
+      }).select("id").single();
 
       if (error) throw error;
+
+      // Auto-generate statement if tenant was assigned with move-in date
+      if (newUnit && tenantId && tenantId !== "__none__" && moveInDate) {
+        const today = new Date();
+        const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+        const currentYear = today.getFullYear();
+        const periodMonth = `${currentMonth}/${currentYear}`;
+        
+        console.log("Unit created with tenant and move-in date, generating statement for:", periodMonth);
+        try {
+          const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
+            body: { 
+              unit_id: newUnit.id, 
+              period_month: periodMonth 
+            }
+          });
+          
+          if (generateError) {
+            console.error("Error generating statement:", generateError);
+            // Don't show error to user - statement might already exist
+          } else if (generatedStatement) {
+            console.log("Statement generated successfully:", generatedStatement);
+          }
+        } catch (error) {
+          console.error("Exception generating statement:", error);
+          // Don't show error to user - statement might already exist
+        }
+      }
 
       toast.success("Unit added successfully");
       resetForm();
@@ -168,6 +273,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
     setDailyLateFee("0");
     setMoveInDate("");
     setFirstMonthPaid(false);
+    setTenantComboboxOpen(false);
   };
 
   return (
@@ -215,53 +321,92 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
 
             <div className="grid gap-2">
               <Label>Assign Tenant (optional)</Label>
-              <Select value={tenantId || "__none__"} onValueChange={(value) => {
-                setTenantId(value);
-                // Clear move-in date and first month paid if tenant is removed
-                if (value === "__none__") {
-                  setMoveInDate("");
-                  setFirstMonthPaid(false);
-                }
-              }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a tenant" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No tenant</SelectItem>
-                  {tenants.map((tenant) => (
-                    <SelectItem key={tenant.id} value={tenant.id}>
-                      {tenant.full_name 
-                        ? `${tenant.full_name} (${tenant.email})`
-                        : tenant.email}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {tenants.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No available tenants. Add tenants in the Tenants tab first.
-                </p>
-              )}
+              <Popover open={tenantComboboxOpen} onOpenChange={setTenantComboboxOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={tenantComboboxOpen}
+                    className="w-full justify-between"
+                    disabled={loading}
+                  >
+                    {getSelectedTenantDisplay()}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search by email or name..." />
+                    <CommandList>
+                      <CommandEmpty>
+                        {tenants.length === 0
+                          ? "No available tenants. All tenants are assigned to units."
+                          : "No tenants found."}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value="__none__"
+                          onSelect={() => {
+                            setTenantId("");
+                            setMoveInDate("");
+                            setFirstMonthPaid(false);
+                            setTenantComboboxOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              (!tenantId || tenantId === "__none__") ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          No tenant
+                        </CommandItem>
+                        {tenants.map((tenant) => (
+                          <CommandItem
+                            key={tenant.id}
+                            value={`${tenant.full_name || ""} ${tenant.email}`}
+                            onSelect={() => {
+                              setTenantId(tenant.id);
+                              setTenantComboboxOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                tenantId === tenant.id ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {tenant.full_name 
+                              ? `${tenant.full_name} (${tenant.email})`
+                              : tenant.email}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
-            {/* Move In Date - only show when tenant is assigned */}
+            {/* Move In Date - show when tenant is assigned */}
             {tenantId && tenantId !== "__none__" && (
               <div className="grid gap-2">
-                <Label htmlFor="moveInDate">Move In Date (optional)</Label>
+                <Label htmlFor="moveInDate">Move In Date *</Label>
                 <Input
                   id="moveInDate"
                   type="date"
                   value={moveInDate}
                   onChange={(e) => setMoveInDate(e.target.value)}
                   disabled={loading}
+                  required
                 />
                 <p className="text-xs text-muted-foreground">
-                  The date when the tenant moves in. Used to calculate pro-rated rent for the first month.
+                  The date when the tenant moves in. If first month is not paid, tenant will owe prorated rent from this date to the end of the month. If first month is paid, tenant won't owe anything until the due date of the following month.
                 </p>
               </div>
             )}
 
-            {/* First Month Paid - only show when tenant is assigned */}
+            {/* First Month Paid - show when tenant is assigned */}
             {tenantId && tenantId !== "__none__" && (
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -271,28 +416,43 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                   disabled={loading}
                 />
                 <Label htmlFor="firstMonthPaid" className="text-sm font-normal cursor-pointer">
-                  First month has been paid (tenant not responsible for current month)
+                  First month has been paid (tenant won't owe anything until the due date of the following month)
                 </Label>
               </div>
             )}
 
-            {/* Pro-rated Rent Display - only show when tenant is assigned, move-in date is set, and not first of month */}
+            {/* Pro-rated Rent Display - show when tenant is assigned, move-in date is set */}
             {tenantId && tenantId !== "__none__" && moveInDate && monthlyRent && (
               (() => {
                 const prorated = calculateProratedRent(moveInDate, parseFloat(monthlyRent));
-                if (prorated === null) return null;
+                const monthlyRentValue = parseFloat(monthlyRent);
+                
                 return (
-                  <div className="bg-muted/50 p-3 rounded-lg">
-                    <p className="text-sm font-medium text-foreground mb-1">Pro-rated Rent for Move-In Month</p>
-                    <p className="text-xs text-muted-foreground">
-                      Monthly Rent: ${parseFloat(monthlyRent).toFixed(2)}
-                    </p>
-                    <p className="text-lg font-semibold text-primary">
-                      Pro-rated Amount: ${prorated.toFixed(2)}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      This amount will be charged for the move-in month only.
-                    </p>
+                  <div className="bg-muted/50 p-3 rounded-lg border border-border">
+                    <p className="text-sm font-medium text-foreground mb-2">Rent Calculation for Move-In Month</p>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        Monthly Rent: ${monthlyRentValue.toFixed(2)}
+                      </p>
+                      {prorated !== null ? (
+                        <>
+                          <p className="text-lg font-semibold text-primary">
+                            Pro-rated Amount: ${prorated.toFixed(2)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {firstMonthPaid 
+                              ? "✅ First month paid - Tenant won't owe anything until the due date of the following month."
+                              : "⚠️ First month NOT paid - Tenant will owe this prorated amount for the move-in month."}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {firstMonthPaid 
+                            ? "✅ First month paid - Tenant won't owe anything until the due date of the following month."
+                            : `Full month rent: $${monthlyRentValue.toFixed(2)} (move-in is on the 1st)`}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 );
               })()
