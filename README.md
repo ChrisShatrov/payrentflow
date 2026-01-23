@@ -1,97 +1,147 @@
-# Welcome to your Lovable project
+# RentFlow
 
-## Project info
+**Pay Rent, Stress-Free.**
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+RentFlow is a comprehensive property management and rent collection platform that simplifies rental operations for landlords and tenants. Manage multiple properties, collect rent online, generate statements, track payments, and handle lease agreements—all from one unified platform.
 
-## How can I edit this code?
+## Table of Contents
 
-There are several ways of editing your application.
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Getting Started](#getting-started)
+- [Project Structure](#project-structure)
+- [Setup Instructions](#setup-instructions)
+- [Development](#development)
+- [Deployment](#deployment)
+- [Key Features](#key-features)
 
-**Use Lovable**
+## Features
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### For Landlords
+- **Property Management**: Create and manage multiple properties and units
+- **Tenant Management**: Invite tenants, assign units, and track tenant information
+- **Rent Collection**: Accept online payments via Stripe Connect
+- **Statement Generation**: Automated monthly rent statements with pro-rated calculations
+- **Lease Management**: Create, customize, and send lease agreements via DocuSign
+- **Payment Tracking**: Monitor payments, late fees, and outstanding balances
+- **Dashboard Analytics**: View property statistics, payment history, and financial summaries
 
-Changes made via Lovable will be committed automatically to this repo.
+### For Tenants
+- **Dashboard**: View unit information, rent due, and payment history
+- **Online Payments**: Make rent payments securely through Stripe
+- **Document Access**: View and download lease agreements and statements
+- **Maintenance Requests**: Submit and track maintenance requests
+- **Lease Signing**: Sign lease agreements electronically via DocuSign
 
-**Use your preferred IDE**
+## Tech Stack
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Frontend
+- **React 18** with TypeScript
+- **Vite** for build tooling
+- **React Router** for navigation
+- **shadcn/ui** component library
+- **Tailwind CSS** for styling
+- **Zod** for form validation
+- **date-fns** for date manipulation
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### Backend
+- **Supabase** (PostgreSQL database, Authentication, Storage, Edge Functions)
+- **Stripe** for payment processing
+- **DocuSign** for e-signatures
+- **Resend** for email notifications
+- **Browserless** for PDF generation
 
-Follow these steps:
+### Infrastructure
+- **Supabase Edge Functions** (Deno runtime)
+- **Row Level Security (RLS)** for data access control
+- **Supabase Storage** for file management
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+## Getting Started
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+### Prerequisites
 
-# Step 3: Install the necessary dependencies.
-npm i
+- Node.js 18+ and npm (or use [nvm](https://github.com/nvm-sh/nvm#installing-and-updating))
+- Supabase account and project
+- Stripe account (for payment processing)
+- DocuSign account (for e-signatures, optional)
+- Resend account (for email notifications)
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd payrentflow
+   ```
+
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+3. **Set up environment variables**
+   Create a `.env` file in the root directory:
+   ```env
+   VITE_SUPABASE_URL=your_supabase_url
+   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+
+4. **Run database migrations**
+   ```bash
+   supabase migration up
+   ```
+
+5. **Start the development server**
+   ```bash
+   npm run dev
+   ```
+
+6. **Open your browser**
+   Navigate to `http://localhost:5173`
+
+## Project Structure
+
+```
+payrentflow/
+├── src/
+│   ├── components/          # Reusable React components
+│   │   ├── admin/          # Admin/landlord components
+│   │   ├── tenant/         # Tenant components
+│   │   ├── ui/             # shadcn/ui components
+│   │   └── shared/         # Shared components
+│   ├── pages/              # Page components
+│   │   ├── admin/          # Admin dashboard pages
+│   │   └── tenant/         # Tenant dashboard pages
+│   ├── hooks/              # Custom React hooks
+│   ├── integrations/       # Third-party integrations
+│   │   └── supabase/       # Supabase client and types
+│   └── lib/                # Utility functions
+├── supabase/
+│   ├── migrations/         # Database migrations
+│   └── functions/          # Edge Functions
+├── public/                 # Static assets
+└── scripts/                # Build and utility scripts
 ```
 
-**Edit a file directly in GitHub**
+## Setup Instructions
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### 1. Database Setup
 
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
-
-## Dynamic Lease Generation + DocuSign Integration
-
-This project includes a complete lease generation and e-signature system with DocuSign integration.
-
-### Setup Instructions
-
-#### 1. Database Migration
-
-Run the migration to create the necessary tables:
-
+Run all migrations in order:
 ```bash
-# Apply the migration
 supabase migration up
 ```
 
-Or manually run: `supabase/migrations/20260120000000_lease_templates_and_leases.sql`
+Key migrations include:
+- Initial schema setup
+- Profile creation triggers
+- Tenant invite system
+- Lease templates and leases
+- Move-in date and pro-rated rent support
 
-#### 2. Supabase Storage Bucket
+### 2. Supabase Storage Buckets
 
-Create a storage bucket for lease PDFs:
+Create storage buckets for lease PDFs:
 
 ```sql
 -- Run in Supabase SQL Editor
@@ -100,9 +150,7 @@ VALUES ('leases', 'leases', false);
 ```
 
 Set up storage policies:
-
 ```sql
--- Allow authenticated users to upload/download their own leases
 CREATE POLICY "Users can upload leases"
 ON storage.objects FOR INSERT
 TO authenticated
@@ -114,112 +162,203 @@ TO authenticated
 USING (bucket_id = 'leases');
 ```
 
-#### 3. Environment Variables
+### 3. Environment Variables
 
-Add these to your `.env` file (or Supabase Edge Function secrets):
-
+#### Frontend (.env)
 ```env
-# DocuSign
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+#### Supabase Edge Functions (set in Supabase Dashboard)
+
+**Required:**
+```env
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+RESEND_API_KEY=your_resend_api_key
+FRONTEND_URL=https://your-domain.com
+```
+
+**Stripe (for payments):**
+```env
+STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
+```
+
+**DocuSign (for e-signatures, optional):**
+```env
 DOCUSIGN_INTEGRATION_KEY=your_integration_key
 DOCUSIGN_SECRET_KEY=your_secret_key
 DOCUSIGN_ACCOUNT_ID=your_account_id
-DOCUSIGN_BASE_URL=https://demo.docusign.net  # Use https://www.docusign.net for production
+DOCUSIGN_BASE_URL=https://demo.docusign.net
 DOCUSIGN_REDIRECT_URI=https://your-project.supabase.co/functions/v1/docusign-callback
 DOCUSIGN_WEBHOOK_SECRET=your_webhook_secret
-
-# Resend (for email notifications)
-RESEND_API_KEY=your_resend_api_key
-
-# Encryption (optional, defaults to DOCUSIGN_INTEGRATION_KEY)
-ENCRYPTION_KEY=your_32_byte_key
-
-# Frontend URL (for redirects)
-FRONTEND_URL=http://localhost:5173  # Update for production
 ```
 
-#### 4. DocuSign Setup
+**Browserless (for PDF generation):**
+```env
+BROWSERLESS_API_KEY=your_browserless_api_key
+```
 
-1. Create a DocuSign Integration (OAuth app) in the DocuSign Developer Center
-2. Set the redirect URI to: `https://your-project.supabase.co/functions/v1/docusign-callback`
+### 4. Stripe Setup
+
+1. Create a Stripe account
+2. Set up Stripe Connect for multi-party payments
+3. Configure webhook endpoint: `https://your-project.supabase.co/functions/v1/stripe-webhook`
+4. Add webhook events: `payment_intent.succeeded`, `payment_intent.payment_failed`, etc.
+
+### 5. DocuSign Setup (Optional)
+
+1. Create a DocuSign Integration in the DocuSign Developer Center
+2. Set redirect URI: `https://your-project.supabase.co/functions/v1/docusign-callback`
 3. Enable scopes: `signature`, `impersonation`
-4. Set up a Connect webhook pointing to: `https://your-project.supabase.co/functions/v1/docusign-webhook`
-5. Configure webhook events: `envelope-sent`, `envelope-delivered`, `envelope-signed`, `envelope-completed`, `envelope-declined`, `envelope-voided`
+4. Set up Connect webhook: `https://your-project.supabase.co/functions/v1/docusign-webhook`
+5. Configure webhook events: `envelope-sent`, `envelope-delivered`, `envelope-signed`, `envelope-completed`, etc.
 
-#### 5. Dependencies
+### 6. Resend Setup
 
-The PDF generation uses Puppeteer. For Supabase Edge Functions, you may need to:
+1. Create a Resend account
+2. Verify your domain (see `RESEND_DOMAIN_SETUP.md`)
+3. Add `RESEND_API_KEY` to Supabase Edge Function secrets
+4. Set `RESEND_FROM_EMAIL` environment variable
 
-- Use `npm:puppeteer@21.5.0` (already configured in the function)
-- Or use a headless browser service like Browserless
+### 7. Deploy Edge Functions
 
-#### 6. Testing the Flow
+```bash
+# Deploy all functions
+supabase functions deploy
 
-1. **Landlord creates template**: Navigate to `/admin/lease-templates` and create a template
-2. **Connect DocuSign**: Go to `/admin/settings` and connect DocuSign account
-3. **Create lease**: Navigate to `/admin/leases` and create a new lease
-4. **Send for signature**: Click "Send for Signature" on a draft lease
-5. **Tenant signs**: Tenant receives email and can sign at `/tenant/leases`
-6. **Webhook updates**: DocuSign webhook automatically updates lease status
-7. **Download executed PDF**: Both parties can download the signed PDF
-
-### Features
-
-- **Template Editor**: Create customizable lease templates with variable placeholders
-- **Dynamic PDF Generation**: Generate PDFs from HTML templates with variable replacement
-- **DocuSign Integration**: Full OAuth flow per landlord, embedded signing, webhook handling
-- **Email Notifications**: Automated emails via Resend (ready to sign, reminders, completed)
-- **Audit Trail**: Complete event log for each lease
-- **Security**: RLS policies, encrypted token storage, webhook signature verification
-
-### File Structure
-
-```
-supabase/
-  migrations/
-    20260120000000_lease_templates_and_leases.sql
-  functions/
-    generate-lease-pdf/
-      index.ts
-    docusign-connect/
-      index.ts
-    docusign-callback/
-      index.ts
-    create-lease/
-      index.ts
-    send-lease-for-signature/
-      index.ts
-    get-embedded-signing-url/
-      index.ts
-    docusign-webhook/
-      index.ts
-    send-lease-email/
-      index.ts
-    _shared/
-      docusign-service.ts
-
-src/
-  pages/
-    admin/
-      AdminLeaseTemplates.tsx
-      AdminLeases.tsx
-    tenant/
-      TenantLeases.tsx
-  components/
-    admin/
-      LeaseTemplateEditor.tsx
-      CreateLeaseWizard.tsx
-      LeasePreviewModal.tsx
-      DocuSignConnectDialog.tsx
-    tenant/
-      LeaseSigningModal.tsx
-    shared/
-      LeaseStatusBadge.tsx
-      LeaseTimeline.tsx
+# Or deploy individual functions
+supabase functions deploy generate-statement
+supabase functions deploy create-rent-payment
+supabase functions deploy send-tenant-invite
+# ... etc
 ```
 
-### Troubleshooting
+## Development
 
-- **PDF generation fails**: Ensure Puppeteer dependencies are available in the Edge Function environment
-- **DocuSign OAuth fails**: Check redirect URI matches exactly in DocuSign settings
-- **Webhook not receiving events**: Verify webhook URL is accessible and HMAC secret matches
-- **Email not sending**: Check Resend API key and domain verification
+### Available Scripts
+
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build
+- `npm run lint` - Run ESLint
+- `npm run generate-sitemap` - Generate sitemap.xml
+
+### Development Workflow
+
+1. Make changes to code
+2. Test locally with `npm run dev`
+3. Run migrations if database changes are needed
+4. Deploy edge functions if backend changes were made
+5. Test in staging environment before production
+
+## Deployment
+
+### Build for Production
+
+```bash
+npm run build
+```
+
+This generates an optimized production build in the `dist/` directory.
+
+### Deploy to Vercel
+
+1. Connect your repository to Vercel
+2. Set environment variables in Vercel dashboard
+3. Deploy automatically on push to main branch
+
+### Deploy Edge Functions
+
+```bash
+supabase functions deploy
+```
+
+## Key Features
+
+### Dynamic Lease Generation + DocuSign Integration
+
+Create customizable lease templates and send them for electronic signature.
+
+**Setup:**
+1. Run migration: `supabase/migrations/20260120000000_lease_templates_and_leases.sql`
+2. Create storage bucket (see Database Setup above)
+3. Configure DocuSign environment variables
+4. Connect DocuSign account in Admin Settings
+
+**Usage:**
+1. Create lease template at `/admin/lease-templates`
+2. Connect DocuSign account at `/admin/settings`
+3. Create lease at `/admin/leases`
+4. Send for signature
+5. Tenant signs at `/tenant/leases`
+
+### Pro-Rated Rent Calculation
+
+Automatically calculates pro-rated rent for tenants moving in mid-month:
+- Supports move-in date tracking
+- Calculates prorated amounts based on days remaining in month
+- Handles "first month paid" scenarios
+- No late fees for move-in month
+
+### Tenant Invitation System
+
+Landlords can invite tenants via email:
+- Pre-fills tenant information
+- Auto-confirms tenant accounts
+- Assigns units automatically
+- Sends welcome emails
+
+### Automated Statement Generation
+
+- Monthly statements generated automatically
+- Pro-rated calculations for move-in month
+- Late fee calculations
+- Payment tracking and history
+
+### Payment Processing
+
+- Stripe Connect integration
+- Secure payment processing
+- Split payment support
+- Payment history and receipts
+
+## Troubleshooting
+
+### Common Issues
+
+**PDF generation fails:**
+- Verify Browserless API key is set
+- Check edge function logs for errors
+
+**DocuSign OAuth fails:**
+- Ensure redirect URI matches exactly in DocuSign settings
+- Check integration key and secret are correct
+
+**Webhook not receiving events:**
+- Verify webhook URL is accessible
+- Check HMAC secret matches
+- Review edge function logs
+
+**Email not sending:**
+- Verify Resend API key is set
+- Check domain verification status
+- Review email function logs
+
+**Database connection issues:**
+- Verify Supabase URL and keys are correct
+- Check RLS policies are properly configured
+- Review migration status
+
+## Support
+
+For questions or issues:
+- Email: support@payrentflow.com
+- Check documentation in `/docs` directory
+- Review migration files for database schema
+
+## License
+
+[Add your license information here]
