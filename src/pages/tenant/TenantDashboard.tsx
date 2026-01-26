@@ -45,6 +45,7 @@ interface UnitData {
   property: {
     name: string;
     address: string;
+    allow_maintenance_requests?: boolean;
   } | null;
 }
 
@@ -84,6 +85,7 @@ export default function TenantDashboard() {
   const [tenantProfile, setTenantProfile] = useState<{ full_name: string; email: string } | null>(null);
   const [paymentStreak, setPaymentStreak] = useState<number | null>(null);
   const [remainingBalance, setRemainingBalance] = useState<number | null>(null);
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(true);
 
   // Helper function to calculate pro-rated rent (same logic as generate-statement)
   const calculateProratedRent = useCallback((moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
@@ -238,7 +240,8 @@ export default function TenantDashboard() {
           tenant_id,
           property:properties (
             name,
-            address
+            address,
+            allow_maintenance_requests
           )
         `)
         .eq("tenant_id", user.id)
@@ -382,6 +385,10 @@ export default function TenantDashboard() {
       if (unitData) {
         console.log("[TenantDashboard] Unit found successfully:", unitData);
         setUnit(unitData as unknown as UnitData);
+        
+        // Set maintenance enabled status based on property setting
+        const maintenanceAllowed = (unitData.property as any)?.allow_maintenance_requests ?? true;
+        setMaintenanceEnabled(maintenanceAllowed);
 
         // Skip current month's statement if first_month_paid is true
         const currentMonth = format(new Date(), "MM/yyyy");
@@ -1009,35 +1016,39 @@ export default function TenantDashboard() {
     // Can always pay if past due
     if (isPastDue()) return true;
     
+    // DEMO MODE: Allow payment anytime for demo purposes
+    // TODO: Remove this for production - restore the 3-day restriction
+    return true;
+    
     // Calculate due date for the current statement's period
-    const today = startOfDay(new Date());
-    const [month, year] = currentStatement.period_month.split('/').map(Number);
-    const currentMonth = format(new Date(), "MM/yyyy");
-    const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+    // const today = startOfDay(new Date());
+    // const [month, year] = currentStatement.period_month.split('/').map(Number);
+    // const currentMonth = format(new Date(), "MM/yyyy");
+    // const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
     
-    // Check if this is the move-in month
-    const isMoveInMonth = unit.move_in_date && 
-      year === currentYear && 
-      month === currentMonthNum;
+    // // Check if this is the move-in month
+    // const isMoveInMonth = unit.move_in_date && 
+    //   year === currentYear && 
+    //   month === currentMonthNum;
     
-    let statementDueDate: Date;
-    if (isMoveInMonth && unit.move_in_date) {
-      // For move-in month: due date is move-in date (or today if already moved in)
-      const moveInDate = startOfDay(new Date(unit.move_in_date));
-      statementDueDate = moveInDate > today ? moveInDate : today;
-    } else {
-      // Standard due date
-      statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
-    }
+    // let statementDueDate: Date;
+    // if (isMoveInMonth && unit.move_in_date) {
+    //   // For move-in month: due date is move-in date (or today if already moved in)
+    //   const moveInDate = startOfDay(new Date(unit.move_in_date));
+    //   statementDueDate = moveInDate > today ? moveInDate : today;
+    // } else {
+    //   // Standard due date
+    //   statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    // }
     
-    // Calculate days until due date (can be negative if past due, but we already checked isPastDue)
-    const daysUntilDue = differenceInDays(statementDueDate, today);
+    // // Calculate days until due date (can be negative if past due, but we already checked isPastDue)
+    // const daysUntilDue = differenceInDays(statementDueDate, today);
     
-    // If balance is up to date (not past due), only allow payment within 3 days of due date
-    // This means: daysUntilDue must be <= 3 (3 days before, on due date, or after)
-    // But since we already checked isPastDue() above, if we get here, we're not past due
-    // So we only allow if daysUntilDue <= 3
-    return daysUntilDue <= 3;
+    // // If balance is up to date (not past due), only allow payment within 3 days of due date
+    // // This means: daysUntilDue must be <= 3 (3 days before, on due date, or after)
+    // // But since we already checked isPastDue() above, if we get here, we're not past due
+    // // So we only allow if daysUntilDue <= 3
+    // return daysUntilDue <= 3;
   };
 
   const handleQuickAction = (label: string) => {
@@ -1064,7 +1075,7 @@ export default function TenantDashboard() {
 
   const quickActions = [
     { label: "Documents", icon: FileText, action: () => handleQuickAction("Documents") },
-    { label: "Maintenance", icon: Wrench, action: () => handleQuickAction("Maintenance") },
+    ...(maintenanceEnabled ? [{ label: "Maintenance", icon: Wrench, action: () => handleQuickAction("Maintenance") }] : []),
     { label: "Contact", icon: MessageSquare, action: () => handleQuickAction("Contact") },
     { label: "Settings", icon: Settings, action: () => handleQuickAction("Settings") },
     { label: "Help", icon: HelpCircle, action: () => handleQuickAction("Help") },
@@ -1099,28 +1110,33 @@ export default function TenantDashboard() {
   const getDaysUntilPaymentAvailable = () => {
     if (!currentStatement || !unit || currentStatement.status === "paid") return null;
     if (pastDue) return null; // Can always pay if past due
-    const today = startOfDay(new Date());
-    const [month, year] = currentStatement.period_month.split('/').map(Number);
-    const currentMonth = format(new Date(), "MM/yyyy");
-    const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
     
-    // Check if this is the move-in month
-    const isMoveInMonth = unit.move_in_date && 
-      year === currentYear && 
-      month === currentMonthNum;
+    // DEMO MODE: Payment is always available (return null means available now)
+    // TODO: Remove this for production - restore the 3-day restriction
+    return null;
     
-    let statementDueDate: Date;
-    if (isMoveInMonth && unit.move_in_date) {
-      // For move-in month: due date is move-in date (or today if already moved in)
-      const moveInDate = startOfDay(new Date(unit.move_in_date));
-      statementDueDate = moveInDate > today ? moveInDate : today;
-    } else {
-      // Standard due date
-      statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
-    }
+    // const today = startOfDay(new Date());
+    // const [month, year] = currentStatement.period_month.split('/').map(Number);
+    // const currentMonth = format(new Date(), "MM/yyyy");
+    // const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
     
-    const daysUntilDue = differenceInDays(statementDueDate, today);
-    return daysUntilDue > 3 ? daysUntilDue - 3 : null;
+    // // Check if this is the move-in month
+    // const isMoveInMonth = unit.move_in_date &&
+    //   year === currentYear &&
+    //   month === currentMonthNum;
+
+    // let statementDueDate: Date;
+    // if (isMoveInMonth && unit.move_in_date) {
+    //   // For move-in month: due date is move-in date (or today if already moved in)
+    //   const moveInDate = startOfDay(new Date(unit.move_in_date));
+    //   statementDueDate = moveInDate > today ? moveInDate : today;
+    // } else {
+    //   // Standard due date
+    //   statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    // }
+    
+    // const daysUntilDue = differenceInDays(statementDueDate, today);
+    // return daysUntilDue > 3 ? daysUntilDue - 3 : null;
   };
   const daysUntilPaymentAvailable = getDaysUntilPaymentAvailable();
 
@@ -1183,7 +1199,7 @@ export default function TenantDashboard() {
 
   if (loading) {
     return (
-      <TenantLayout>
+      <TenantLayout onOpenSettings={() => setSettingsModalOpen(true)}>
         <div className="flex flex-col items-center justify-center h-64 gap-4">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
           <p className="text-sm text-muted-foreground">Loading your dashboard...</p>
@@ -1193,7 +1209,7 @@ export default function TenantDashboard() {
   }
 
   return (
-    <TenantLayout>
+    <TenantLayout onOpenSettings={() => setSettingsModalOpen(true)}>
       <div className="space-y-8 animate-fade-in">
         {/* Refresh button for debugging */}
         {!unit && (
@@ -1272,20 +1288,44 @@ export default function TenantDashboard() {
                       const currentMonth = format(new Date(), "MM/yyyy");
                       try {
                         toast.loading("Generating statement...");
-                        const { error } = await supabase.functions.invoke("generate-statement", {
+                        const { data, error } = await supabase.functions.invoke("generate-statement", {
                           body: { unit_id: unit.id, period_month: currentMonth }
                         });
                         toast.dismiss();
-                        if (!error) {
-                          // Refresh data and then open payment modal
-                          await fetchTenantData();
+                        if (error) {
+                          console.error("Error generating statement:", error);
+                          toast.error(
+                            error.message || "Failed to generate statement. Please try again or contact support."
+                          );
+                          return;
+                        }
+                        // Refresh data and then open payment modal
+                        await fetchTenantData();
+                        // Wait a moment for state to update, then check if statement exists
+                        // If data was returned from the function, statement was created
+                        if (data) {
                           setPaymentModalOpen(true);
                         } else {
-                          toast.error("Please wait for your statement to be generated");
+                          // Query directly to check if statement was created
+                          const { data: newStatement } = await supabase
+                            .from("statements")
+                            .select("*")
+                            .eq("unit_id", unit.id)
+                            .eq("period_month", currentMonth)
+                            .maybeSingle();
+                          
+                          if (newStatement) {
+                            setCurrentStatement(newStatement);
+                            setPaymentModalOpen(true);
+                          } else {
+                            toast.error("Statement generation completed but statement not found. Please refresh the page.");
+                          }
                         }
                       } catch (err) {
                         toast.dismiss();
-                        toast.error("Failed to generate statement");
+                        console.error("Exception generating statement:", err);
+                        const errorMessage = err instanceof Error ? err.message : "Failed to generate statement";
+                        toast.error(`Error: ${errorMessage}. Please check your connection and try again.`);
                       }
                     } else {
                       setPaymentModalOpen(true);

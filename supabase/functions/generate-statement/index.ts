@@ -38,7 +38,7 @@ async function sendNotificationEmail(
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
+    return new Response(null, { status: 200, headers: corsHeaders })
   }
 
   try {
@@ -179,8 +179,7 @@ serve(async (req) => {
 
     // Calculate late fee if overdue
     // IMPORTANT: No late fees for move-in month (first month) as per user requirement
-    const today = new Date()
-    const [month, year] = period_month.split('/')
+    // Reuse 'today' and [month, year] declared earlier
     
     // Check if this is the move-in month
     const isMoveInMonth = moveInDateObj && 

@@ -111,6 +111,7 @@ export default function AdminProperties() {
           property={selectedProperty}
           open={sheetOpen}
           onOpenChange={setSheetOpen}
+          onPropertyUpdated={fetchProperties}
         />
       </div>
     </AdminLayout>

@@ -22,6 +22,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<UserRole>(null);
   const [loading, setLoading] = useState(true);
   const isSigningOutRef = useRef(false);
+  const isSigningInRef = useRef(false);
 
   // Comprehensive function to clear all auth data
   // preserveJustSignedOut: if true, keeps the just_signed_out flag (for manual sign out)
@@ -189,6 +190,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         
+        // If this is a SIGNED_IN event, clear the just_signed_out flag to allow the session
+        // This MUST happen before any other checks to prevent the flag from blocking the login
+        if (event === 'SIGNED_IN' && session) {
+          console.log('[useAuth] Sign in event detected, clearing just_signed_out flag immediately');
+          localStorage.removeItem('just_signed_out');
+          // Also reset the signing out ref to allow the session to proceed
+          isSigningOutRef.current = false;
+        }
+        
         // If session is expired, clear it (not a manual sign out, so don't preserve flag)
         if (session && session.expires_at && session.expires_at < Date.now() / 1000) {
           console.log('[useAuth] Session expired in auth state change, clearing');
@@ -223,12 +233,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(async ({ data: { session }, error }) => {
       console.log('[useAuth] Initial session check:', session?.user?.id, 'error:', error);
       
-      // If we just signed out, ignore any restored session
-      const justSignedOut = localStorage.getItem('just_signed_out');
-      if (justSignedOut) {
-        console.log('[useAuth] Just signed out, ignoring restored session');
-        await clearAllAuthData();
-        return;
+      // If we're currently signing in, don't clear the session
+      if (isSigningInRef.current) {
+        console.log('[useAuth] Currently signing in, allowing session to proceed');
+        // Still clear the flag if it exists
+        localStorage.removeItem('just_signed_out');
+      } else {
+        // If we just signed out, ignore any restored session
+        // BUT only if the session is old/stale (more than 2 seconds old)
+        // This prevents clearing a fresh login session
+        const justSignedOut = localStorage.getItem('just_signed_out');
+        if (justSignedOut) {
+          try {
+            const timestamp = parseInt(justSignedOut, 10);
+            const timeSinceSignOut = Date.now() - timestamp;
+            // Only ignore session if sign out was VERY recent (within last 2 seconds)
+            // After 2 seconds, allow new login sessions to proceed
+            // This gives enough time for manual sign out to complete but allows quick re-login
+            if (!isNaN(timestamp) && timeSinceSignOut < 2000) {
+              console.log('[useAuth] Just signed out (very recent), ignoring restored session');
+              await clearAllAuthData();
+              return;
+            } else {
+              // Sign out was more than 2 seconds ago, clear the flag and allow login
+              console.log('[useAuth] Sign out was more than 2 seconds ago, allowing session');
+              localStorage.removeItem('just_signed_out');
+            }
+          } catch {
+            // If timestamp is invalid, just remove the flag
+            localStorage.removeItem('just_signed_out');
+          }
+        }
       }
       
       // Check last activity timestamp - if older than 10 minutes, clear everything
@@ -321,10 +356,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = async (email: string, password: string) => {
+    // Set flag to indicate we're signing in - this prevents initial session check from clearing the session
+    isSigningInRef.current = true;
+    // Clear just_signed_out flag immediately to prevent blocking
+    localStorage.removeItem('just_signed_out');
+    
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+    
+    // Reset flag after a short delay to allow session to be established
+    setTimeout(() => {
+      isSigningInRef.current = false;
+    }, 3000);
     
     return { error: error as Error | null };
   };

@@ -89,6 +89,16 @@ export function MaintenanceModal({
         
         <form onSubmit={handleSubmit} className="space-y-4 py-4">
           <div className="space-y-2">
+            <Label htmlFor="unitNumber">Unit Number</Label>
+            <Input
+              id="unitNumber"
+              value={unitNumber}
+              disabled
+              className="bg-muted"
+            />
+          </div>
+          
+          <div className="space-y-2">
             <Label htmlFor="subject">Subject</Label>
             <Input
               id="subject"

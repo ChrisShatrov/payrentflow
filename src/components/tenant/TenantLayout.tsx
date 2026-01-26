@@ -14,6 +14,7 @@ import { NotificationsDropdown } from "./NotificationsDropdown";
 
 interface TenantLayoutProps {
   children: ReactNode;
+  onOpenSettings?: () => void;
 }
 
 const navItems = [
@@ -22,7 +23,7 @@ const navItems = [
   { label: "Statements", href: "/tenant/statements", icon: FileText },
 ];
 
-export function TenantLayout({ children }: TenantLayoutProps) {
+export function TenantLayout({ children, onOpenSettings }: TenantLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
@@ -81,11 +82,19 @@ export function TenantLayout({ children }: TenantLayoutProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem asChild>
-                  <Link to="/tenant/settings" className="flex items-center gap-2">
-                    <User className="h-4 w-4" />
-                    Profile
-                  </Link>
+                <DropdownMenuItem 
+                  onClick={() => {
+                    if (onOpenSettings) {
+                      onOpenSettings();
+                    } else {
+                      // Fallback: navigate to dashboard where settings modal can be opened
+                      navigate("/tenant");
+                    }
+                  }}
+                  className="flex items-center gap-2 cursor-pointer"
+                >
+                  <User className="h-4 w-4" />
+                  Profile
                 </DropdownMenuItem>
                 <DropdownMenuItem 
                   onClick={async () => {

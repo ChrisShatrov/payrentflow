@@ -7,10 +7,16 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { Building2, MapPin, Calendar, Home, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Building2, MapPin, Calendar, Home, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { AddUnitDialog } from "./AddUnitDialog";
 import { UnitDetailSheet } from "./UnitDetailSheet";
+import { toast } from "sonner";
 
 interface Unit {
   id: string;
@@ -36,19 +42,59 @@ interface PropertyDetailSheetProps {
   } | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onPropertyUpdated?: () => void;
 }
 
-export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDetailSheetProps) {
+export function PropertyDetailSheet({ property, open, onOpenChange, onPropertyUpdated }: PropertyDetailSheetProps) {
   const [units, setUnits] = useState<Unit[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
   const [unitSheetOpen, setUnitSheetOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [propertyData, setPropertyData] = useState<{
+    name: string;
+    address: string;
+    allow_maintenance_requests: boolean;
+  } | null>(null);
+  const [formData, setFormData] = useState({
+    name: "",
+    address: "",
+    allow_maintenance_requests: true,
+  });
 
   useEffect(() => {
     if (property && open) {
+      fetchProperty();
       fetchUnits();
     }
   }, [property, open]);
+
+  const fetchProperty = async () => {
+    if (!property) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from("properties")
+        .select("name, address, allow_maintenance_requests")
+        .eq("id", property.id)
+        .single();
+
+      if (error) throw error;
+
+      const propertyInfo = {
+        name: data.name,
+        address: data.address,
+        allow_maintenance_requests: data.allow_maintenance_requests ?? true,
+      };
+
+      setPropertyData(propertyInfo);
+      setFormData(propertyInfo);
+    } catch (error) {
+      console.error("Error fetching property:", error);
+      toast.error("Failed to load property details");
+    }
+  };
 
   const fetchUnits = async () => {
     if (!property) return;
@@ -110,6 +156,58 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
     setUnitSheetOpen(true);
   };
 
+  const handleEdit = () => {
+    if (propertyData) {
+      setFormData({
+        name: propertyData.name,
+        address: propertyData.address,
+        allow_maintenance_requests: propertyData.allow_maintenance_requests,
+      });
+      setIsEditing(true);
+    }
+  };
+
+  const handleCancel = () => {
+    setIsEditing(false);
+    if (propertyData) {
+      setFormData({
+        name: propertyData.name,
+        address: propertyData.address,
+        allow_maintenance_requests: propertyData.allow_maintenance_requests,
+      });
+    }
+  };
+
+  const handleSave = async () => {
+    if (!property) return;
+
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("properties")
+        .update({
+          name: formData.name.trim(),
+          address: formData.address.trim(),
+          allow_maintenance_requests: formData.allow_maintenance_requests,
+        })
+        .eq("id", property.id);
+
+      if (error) throw error;
+
+      toast.success("Property updated successfully");
+      setIsEditing(false);
+      await fetchProperty();
+      if (onPropertyUpdated) {
+        onPropertyUpdated();
+      }
+    } catch (error: any) {
+      console.error("Error updating property:", error);
+      toast.error(error.message || "Failed to update property");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!property) return null;
 
   const occupiedUnits = units.filter(u => u.tenant_id).length;
@@ -119,17 +217,95 @@ export function PropertyDetailSheet({ property, open, onOpenChange }: PropertyDe
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent className="sm:max-w-lg">
           <SheetHeader>
-            <SheetTitle className="flex items-center gap-2">
-              <Building2 className="h-5 w-5 text-primary" />
-              {property.name}
-            </SheetTitle>
-            <SheetDescription className="flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5" />
-              {property.address}
-            </SheetDescription>
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <SheetTitle className="flex items-center gap-2">
+                  <Building2 className="h-5 w-5 text-primary" />
+                  {isEditing ? (
+                    <Input
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="max-w-xs"
+                      disabled={saving}
+                    />
+                  ) : (
+                    propertyData?.name || property.name
+                  )}
+                </SheetTitle>
+                <SheetDescription className="flex items-center gap-1.5 mt-1">
+                  <MapPin className="h-3.5 w-3.5" />
+                  {isEditing ? (
+                    <Textarea
+                      value={formData.address}
+                      onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                      className="max-w-xs min-h-[60px]"
+                      disabled={saving}
+                    />
+                  ) : (
+                    propertyData?.address || property.address
+                  )}
+                </SheetDescription>
+              </div>
+              {!isEditing && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleEdit}
+                  className="ml-4"
+                >
+                  <Pencil className="h-4 w-4 mr-2" />
+                  Edit Property
+                </Button>
+              )}
+            </div>
           </SheetHeader>
 
           <div className="mt-6 space-y-6">
+            {/* Edit Form */}
+            {isEditing && (
+              <div className="bg-muted/30 rounded-lg p-4 space-y-4 border border-border">
+                <div className="space-y-2">
+                  <Label htmlFor="allow_maintenance">Enable Maintenance Requests</Label>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="allow_maintenance"
+                      checked={formData.allow_maintenance_requests}
+                      onCheckedChange={(checked) =>
+                        setFormData({ ...formData, allow_maintenance_requests: checked === true })
+                      }
+                      disabled={saving}
+                    />
+                    <Label
+                      htmlFor="allow_maintenance"
+                      className="text-sm font-normal cursor-pointer"
+                    >
+                      Allow tenants to submit maintenance requests for this property
+                    </Label>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancel}
+                    disabled={saving}
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleSave}
+                    disabled={saving || !formData.name.trim() || !formData.address.trim()}
+                  >
+                    <Check className="h-4 w-4 mr-2" />
+                    {saving ? "Saving..." : "Save Changes"}
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* Stats */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-muted/50 rounded-lg p-4">

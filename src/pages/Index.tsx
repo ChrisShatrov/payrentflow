@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
-import { Building2, Users, CreditCard, BarChart3, Shield, Clock, CheckCircle2, ArrowRight, TrendingUp, Zap, Mail, Send, DollarSign, Check } from "lucide-react";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Building2, Users, CreditCard, BarChart3, Shield, Clock, CheckCircle2, ArrowRight, TrendingUp, Zap, Mail, Send, DollarSign, Check, Menu } from "lucide-react";
 import heroImage from "@/assets/hero-apartment.jpg";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +16,7 @@ const Index = () => {
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<{ type: "success" | "error" | null; message: string }>({ type: null, message: "" });
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,7 +90,7 @@ const Index = () => {
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-card/80 backdrop-blur-md border-b border-border">
         <div className="container flex items-center justify-between h-16">
-          <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+          <Link to="/" className="flex items-center gap-1.5 hover:opacity-80 transition-opacity">
             <img src="/logo.png" alt="RentFlow" className="w-12 h-12" />
             <h1 className="text-3xl font-extrabold tracking-tight">
               <span className="text-primary">Rent</span>
@@ -101,7 +103,7 @@ const Index = () => {
             <a href="#pricing" className="text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
             <a href="#contact" className="text-muted-foreground hover:text-foreground transition-colors">Contact Us</a>
           </nav>
-          <div className="flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild>
               <Link to="/auth">Sign In</Link>
             </Button>
@@ -109,6 +111,53 @@ const Index = () => {
               <Link to="/signup">Get Started</Link>
             </Button>
           </div>
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="icon" className="md:hidden">
+                <Menu className="h-6 w-6" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="right" className="w-[300px] sm:w-[400px]">
+              <nav className="flex flex-col gap-4 mt-8">
+                <a 
+                  href="#features" 
+                  className="text-lg font-medium text-foreground hover:text-primary transition-colors"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Features
+                </a>
+                <a 
+                  href="#how-it-works" 
+                  className="text-lg font-medium text-foreground hover:text-primary transition-colors"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  How It Works
+                </a>
+                <a 
+                  href="#pricing" 
+                  className="text-lg font-medium text-foreground hover:text-primary transition-colors"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Pricing
+                </a>
+                <a 
+                  href="#contact" 
+                  className="text-lg font-medium text-foreground hover:text-primary transition-colors"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Contact Us
+                </a>
+                <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-border">
+                  <Button variant="ghost" className="w-full justify-start" asChild>
+                    <Link to="/auth" onClick={() => setMenuOpen(false)}>Sign In</Link>
+                  </Button>
+                  <Button className="w-full" asChild>
+                    <Link to="/signup" onClick={() => setMenuOpen(false)}>Get Started</Link>
+                  </Button>
+                </div>
+              </nav>
+            </SheetContent>
+          </Sheet>
         </div>
       </header>
 
