@@ -367,24 +367,28 @@ export default function AdminDashboard() {
             value={loading ? "—" : stats.properties}
             icon={Building2}
             accentColor="primary"
+            href="/admin/properties"
           />
           <StatsCard
             title="Units"
             value={loading ? "—" : stats.units}
             icon={Home}
             accentColor="blue"
+            href="/admin/properties"
           />
           <StatsCard
             title="Tenants"
             value={loading ? "—" : stats.tenants}
             icon={Users}
             accentColor="accent"
+            href="/admin/tenants"
           />
           <StatsCard
             title="Unpaid Statements"
             value={loading ? "—" : stats.unpaidStatements}
             icon={AlertCircle}
             accentColor="warning"
+            href="/admin/payments"
           />
         </div>
 

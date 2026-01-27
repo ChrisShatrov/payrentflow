@@ -39,6 +39,7 @@ import { Calendar, DollarSign, User, AlertTriangle, Pencil, Check, X, ChevronsUp
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { AddonChip } from "./AddonChip";
 
 interface Tenant {
   id: string;
@@ -61,6 +62,7 @@ interface UnitDetailSheetProps {
     move_in_date?: string | null;
     tenantName?: string | null;
     tenantEmail?: string | null;
+    addons?: Array<{name: string, price: number}> | null;
   } | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -86,6 +88,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     first_month_paid: false,
     move_in_date: "",
   });
+  const [addons, setAddons] = useState<Array<{name: string, price: number}>>([]);
 
   const fetchTenants = async () => {
     try {
@@ -258,6 +261,10 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       ? new Date(unit.move_in_date).toISOString().split('T')[0]
       : "";
     
+    // Load addons from unit (handle both array and null/undefined)
+    const unitAddons = (unit as any).addons || [];
+    const parsedAddons = Array.isArray(unitAddons) ? unitAddons : [];
+    
     setFormData({
       monthly_rent: unit.monthly_rent,
       due_day: unit.due_day,
@@ -269,6 +276,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       first_month_paid: unit.first_month_paid || false,
       move_in_date: moveInDateFormatted,
     });
+    setAddons(parsedAddons);
     setIsEditing(true);
   };
 
@@ -331,6 +339,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         split_payment_fee: formData.allow_split_payment ? formData.split_payment_fee : null,
         first_month_paid: formData.first_month_paid,
         move_in_date: formData.move_in_date || null,
+        addons: addons.length > 0 ? addons : [],
       };
 
       // Handle tenant_id update - explicitly set to null if empty string, otherwise use the value
@@ -710,6 +719,78 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
               <p className="text-xs text-muted-foreground">Day of the month rent is due (1-28)</p>
             </div>
 
+            {/* Unit Addons */}
+            <div className="space-y-2">
+              <Label>Unit Addons (optional)</Label>
+              <div className="flex flex-wrap gap-2">
+                <AddonChip
+                  name="Garage"
+                  selected={addons.some(a => a.name === "Garage")}
+                  price={addons.find(a => a.name === "Garage")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Parking spot"
+                  selected={addons.some(a => a.name === "Parking spot")}
+                  price={addons.find(a => a.name === "Parking spot")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Covered parking spot"
+                  selected={addons.some(a => a.name === "Covered parking spot")}
+                  price={addons.find(a => a.name === "Covered parking spot")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Utilities"
+                  selected={addons.some(a => a.name === "Utilities")}
+                  price={addons.find(a => a.name === "Utilities")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Internet"
+                  selected={addons.some(a => a.name === "Internet")}
+                  price={addons.find(a => a.name === "Internet")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+              </div>
+              {addons.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Addon total: ${addons.reduce((sum, addon) => sum + addon.price, 0).toFixed(2)}/month
+                </p>
+              )}
+            </div>
+
             {/* Late Fee Amount */}
             <div className="space-y-2">
               <Label htmlFor="late_fee_amount">Late Fee Amount ($)</Label>
@@ -864,6 +945,27 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
               </p>
             </div>
           </div>
+
+          {/* Unit Addons */}
+          {unit.addons && Array.isArray(unit.addons) && unit.addons.length > 0 && (
+            <div className="p-4 bg-muted/50 rounded-lg">
+              <p className="text-sm text-muted-foreground mb-3">Unit Addons</p>
+              <div className="space-y-2">
+                {unit.addons.map((addon, index) => (
+                  <div key={index} className="flex items-center justify-between p-2 bg-background rounded border">
+                    <span className="text-sm font-medium">{addon.name}</span>
+                    <span className="text-sm text-muted-foreground">${addon.price.toFixed(2)}/month</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between pt-2 border-t mt-2">
+                  <span className="text-sm font-semibold">Addon Total</span>
+                  <span className="text-sm font-semibold">
+                    ${unit.addons.reduce((sum, addon) => sum + addon.price, 0).toFixed(2)}/month
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Tenant Info */}
           <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">

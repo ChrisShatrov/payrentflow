@@ -30,6 +30,7 @@ interface UnitData {
   daily_late_fee: number;
   first_month_paid?: boolean;
   move_in_date?: string | null;
+  addons?: Array<{name: string, price: number}> | null;
   property: {
     name: string;
   } | null;
@@ -90,6 +91,7 @@ export default function TenantStatements() {
           daily_late_fee,
           first_month_paid,
           move_in_date,
+          addons,
           property:properties (name)
         `)
         .eq("tenant_id", user?.id)
@@ -234,7 +236,24 @@ export default function TenantStatements() {
     return format(date, "MMMM yyyy");
   };
 
-  const pastStatements = statements.filter(s => s.id !== currentStatement?.id);
+  // Filter to only show statements from past months (not current or future)
+  const currentMonth = format(new Date(), "MM/yyyy");
+  const [currentMonthNum, currentYear] = currentMonth.split("/").map(Number);
+
+  const pastStatements = statements.filter(s => {
+    // Exclude current statement
+    if (s.id === currentStatement?.id) return false;
+    
+    // Parse statement period_month
+    const [statementMonth, statementYear] = s.period_month.split("/").map(Number);
+    
+    // Only include statements from past months
+    // Compare year first, then month
+    if (statementYear < currentYear) return true;
+    if (statementYear === currentYear && statementMonth < currentMonthNum) return true;
+    
+    return false; // Exclude current and future months
+  });
 
   if (loading) {
     return (
@@ -320,6 +339,21 @@ export default function TenantStatements() {
                             </div>
                           );
                         }
+                      })()}
+                      {(() => {
+                        // Display addons if unit has them
+                        const unitAddons = (unit?.addons as Array<{name: string, price: number}> | null) || [];
+                        if (Array.isArray(unitAddons) && unitAddons.length > 0) {
+                          return unitAddons.map((addon, index) => (
+                            <div key={index}>
+                              <p className="text-xs text-muted-foreground uppercase tracking-wide">{addon.name}</p>
+                              <p className="text-lg font-semibold text-foreground">
+                                ${addon.price.toLocaleString()}
+                              </p>
+                            </div>
+                          ));
+                        }
+                        return null;
                       })()}
                       {Number(currentStatement.additional_fees) > 0 && (
                         <div>
@@ -535,7 +569,8 @@ export default function TenantStatements() {
           late_fee_type: unit.late_fee_type,
           late_fee_amount: unit.late_fee_amount,
           daily_late_fee: unit.daily_late_fee,
-          move_in_date: unit.move_in_date
+          move_in_date: unit.move_in_date,
+          addons: (unit.addons as Array<{name: string, price: number}> | null) || null
         } : null}
       />
     </TenantLayout>

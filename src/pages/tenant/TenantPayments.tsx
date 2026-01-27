@@ -111,20 +111,51 @@ export default function TenantPayments() {
         setUnitId(unitData.id);
 
         // Fetch all payments for this unit (no limit - show all, including pending)
-        // But filter out old pending payments (older than 1 hour) - these are likely abandoned
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        // Automatically mark old pending payments as failed (abandoned)
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
         const { data: paymentsData, error: paymentsError } = await supabase
           .from("payments")
           .select("*")
           .eq("unit_id", unitData.id)
           .order("created_at", { ascending: false });
         
+        if (paymentsData) {
+          // Find old pending payments and mark them as failed (abandoned)
+          const oldPendingPayments = paymentsData.filter(
+            (p) => (p.status === "pending" || p.status === "processing") && new Date(p.created_at) < thirtyMinutesAgo
+          );
+
+          if (oldPendingPayments.length > 0) {
+            const oldPaymentIds = oldPendingPayments.map((p) => p.id);
+            const { error: updateError } = await supabase
+              .from("payments")
+              .update({ status: "failed" })
+              .in("id", oldPaymentIds);
+
+            if (updateError) {
+              console.error("Error marking old pending payments as failed:", updateError);
+            } else {
+              console.log(`Marked ${oldPendingPayments.length} abandoned payment(s) as failed`);
+              // Update the status in the local data
+              paymentsData.forEach((p) => {
+                if (oldPaymentIds.includes(p.id)) {
+                  p.status = "failed";
+                }
+              });
+            }
+          }
+        }
+        
         // Filter out old pending payments (user opened Stripe but didn't complete)
+        // Show all payments except old pending ones (they're now marked as failed)
         const filteredPayments = paymentsData?.filter((p) => {
           // Show all completed/failed payments
-          if (p.status !== "pending") return true;
-          // For pending payments, only show if created within last hour
-          return new Date(p.created_at) > new Date(oneHourAgo);
+          if (p.status === "completed" || p.status === "failed") return true;
+          // For pending payments, only show if created within last 30 minutes
+          if (p.status === "pending" || p.status === "processing") {
+            return new Date(p.created_at) >= thirtyMinutesAgo;
+          }
+          return true;
         }) || [];
 
         if (paymentsError) {

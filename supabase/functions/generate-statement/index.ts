@@ -158,7 +158,18 @@ serve(async (req) => {
     };
 
     const moveInDateObj = unit.move_in_date ? new Date(unit.move_in_date) : null;
-    const baseRent = calculateProratedRent(moveInDateObj, period_month, Number(unit.monthly_rent))
+    // Calculate addon total
+    const unitAddons = (unit.addons as Array<{name: string, price: number}> | null) || [];
+    const addonTotal = Array.isArray(unitAddons) 
+      ? unitAddons.reduce((sum, addon) => sum + Number(addon.price || 0), 0)
+      : 0;
+    
+    if (addonTotal > 0) {
+      console.log(`Unit ${unit_id} - Addons total: $${addonTotal} (${unitAddons.length} addon(s))`);
+    }
+
+    // Calculate base rent (prorated rent + addons)
+    const baseRent = calculateProratedRent(moveInDateObj, period_month, Number(unit.monthly_rent)) + addonTotal
     
     // Log if pro-rated
     if (moveInDateObj && baseRent !== Number(unit.monthly_rent)) {

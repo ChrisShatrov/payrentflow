@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, AlertCircle, DollarSign } from "lucide-react";
+import { Bell, AlertCircle, DollarSign, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -31,6 +31,7 @@ export function NotificationsDropdown() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
 
@@ -47,6 +48,15 @@ export function NotificationsDropdown() {
     if (!user) return;
 
     try {
+      // Fetch dismissed notifications first to ensure we have the latest list
+      const { data: dismissedData } = await supabase
+        .from("dismissed_notifications")
+        .select("notification_id")
+        .eq("tenant_id", user.id);
+
+      const dismissedIds = new Set(dismissedData?.map((d) => d.notification_id) || []);
+      setDismissedNotificationIds(dismissedIds);
+
       // Fetch tenant's unit
       const { data: unitData } = await supabase
         .from("units")
@@ -84,44 +94,53 @@ export function NotificationsDropdown() {
         
         // Check if overdue (only show if not paid)
         if (isOverdue) {
-          notificationList.push({
-            id: `overdue-${statement.id}`,
-            type: "overdue",
-            title: "Rent Overdue",
-            message: `Your rent payment for ${format(new Date(year, month - 1), "MMMM yyyy")} is overdue. Please make a payment to avoid additional fees.`,
-            statementId: statement.id,
-            periodMonth: statement.period_month,
-            amount: statement.total_due,
-            createdAt: statement.created_at || new Date().toISOString(),
-          });
+          const notificationId = `overdue-${statement.id}`;
+          if (!dismissedIds.has(notificationId)) {
+            notificationList.push({
+              id: notificationId,
+              type: "overdue",
+              title: "Rent Overdue",
+              message: `Your rent payment for ${format(new Date(year, month - 1), "MMMM yyyy")} is overdue. Please make a payment to avoid additional fees.`,
+              statementId: statement.id,
+              periodMonth: statement.period_month,
+              amount: statement.total_due,
+              createdAt: statement.created_at || new Date().toISOString(),
+            });
+          }
         }
 
         // Check if late fees have been applied (only if statement is not paid)
         if (statement.status !== "paid" && statement.late_fee && Number(statement.late_fee) > 0) {
-          notificationList.push({
-            id: `late-fee-${statement.id}`,
-            type: "late_fee",
-            title: "Late Fee Applied",
-            message: `A late fee of $${Number(statement.late_fee).toFixed(2)} has been applied to your ${format(new Date(year, month - 1), "MMMM yyyy")} statement.`,
-            statementId: statement.id,
-            periodMonth: statement.period_month,
-            amount: Number(statement.late_fee),
-            createdAt: statement.created_at || new Date().toISOString(),
-          });
+          const notificationId = `late-fee-${statement.id}`;
+          if (!dismissedIds.has(notificationId)) {
+            notificationList.push({
+              id: notificationId,
+              type: "late_fee",
+              title: "Late Fee Applied",
+              message: `A late fee of $${Number(statement.late_fee).toFixed(2)} has been applied to your ${format(new Date(year, month - 1), "MMMM yyyy")} statement.`,
+              statementId: statement.id,
+              periodMonth: statement.period_month,
+              amount: Number(statement.late_fee),
+              createdAt: statement.created_at || new Date().toISOString(),
+            });
+          }
         }
 
         // Check for additional fees (like failed ACH fees) - only if statement is not paid
         if (statement.status !== "paid" && statement.additional_fees && Number(statement.additional_fees) > 0) {
-          notificationList.push({
-            id: `additional-fee-${statement.id}`,
-            type: "late_fee",
-            title: "Additional Fee Applied",
-            message: `An additional fee of $${Number(statement.additional_fees).toFixed(2)} has been applied to your ${format(new Date(year, month - 1), "MMMM yyyy")} statement.`,
-            statementId: statement.id,
-            periodMonth: statement.period_month,
-            amount: Number(statement.additional_fees),
-            createdAt: statement.created_at || new Date().toISOString(),
-          });
+          const notificationId = `additional-fee-${statement.id}`;
+          if (!dismissedIds.has(notificationId)) {
+            notificationList.push({
+              id: notificationId,
+              type: "late_fee",
+              title: "Additional Fee Applied",
+              message: `An additional fee of $${Number(statement.additional_fees).toFixed(2)} has been applied to your ${format(new Date(year, month - 1), "MMMM yyyy")} statement.`,
+              statementId: statement.id,
+              periodMonth: statement.period_month,
+              amount: Number(statement.additional_fees),
+              createdAt: statement.created_at || new Date().toISOString(),
+            });
+          }
         }
       });
 
@@ -141,6 +160,75 @@ export function NotificationsDropdown() {
   const handleNotificationClick = (notification: Notification) => {
     navigate("/tenant/statements");
     setOpen(false);
+  };
+
+  const handleDismissNotification = async (notificationId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent navigation when clicking dismiss
+
+    if (!user) return;
+
+    try {
+      // Insert dismissed notification
+      const { error } = await supabase
+        .from("dismissed_notifications")
+        .insert({
+          tenant_id: user.id,
+          notification_id: notificationId,
+        });
+
+      if (error) {
+        // If it's a unique constraint error, it's already dismissed - that's fine
+        if (error.code !== "23505") {
+          console.error("Error dismissing notification:", error);
+          toast.error("Failed to dismiss notification");
+          return;
+        }
+      }
+
+      // Update local state
+      setDismissedNotificationIds((prev) => new Set(prev).add(notificationId));
+      setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+
+      toast.success("Notification dismissed");
+    } catch (error) {
+      console.error("Error dismissing notification:", error);
+      toast.error("Failed to dismiss notification");
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!user || notifications.length === 0) return;
+
+    try {
+      // Dismiss all current notifications
+      const notificationIds = notifications.map((n) => n.id);
+      const inserts = notificationIds.map((id) => ({
+        tenant_id: user.id,
+        notification_id: id,
+      }));
+
+      const { error } = await supabase
+        .from("dismissed_notifications")
+        .insert(inserts);
+
+      if (error) {
+        // Some might already be dismissed, that's fine - just log
+        console.log("Some notifications may already be dismissed:", error);
+      }
+
+      // Update local state
+      setDismissedNotificationIds((prev) => {
+        const newSet = new Set(prev);
+        notificationIds.forEach((id) => newSet.add(id));
+        return newSet;
+      });
+      setNotifications([]);
+
+      toast.success("All notifications cleared");
+    } catch (error) {
+      console.error("Error clearing all notifications:", error);
+      toast.error("Failed to clear notifications");
+    }
   };
 
   const unreadCount = notifications.length;
@@ -185,7 +273,8 @@ export function NotificationsDropdown() {
                 <DropdownMenuItem
                   key={notification.id}
                   onClick={() => handleNotificationClick(notification)}
-                  className="flex items-start gap-3 p-3 cursor-pointer focus:bg-muted"
+                  className="flex items-start gap-3 p-3 cursor-pointer focus:bg-muted group"
+                  onSelect={(e) => e.preventDefault()}
                 >
                   <div className={`mt-0.5 rounded-full p-1.5 ${
                     notification.type === "overdue" 
@@ -211,6 +300,14 @@ export function NotificationsDropdown() {
                       </p>
                     )}
                   </div>
+                  <button
+                    onClick={(e) => handleDismissNotification(notification.id, e)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-muted rounded"
+                    aria-label="Dismiss notification"
+                    title="Dismiss"
+                  >
+                    <X className="h-4 w-4 text-muted-foreground" />
+                  </button>
                 </DropdownMenuItem>
               ))}
             </div>
@@ -219,7 +316,7 @@ export function NotificationsDropdown() {
         {notifications.length > 0 && (
           <>
             <DropdownMenuSeparator />
-            <div className="p-2">
+            <div className="p-2 space-y-2">
               <Button
                 variant="ghost"
                 size="sm"
@@ -230,6 +327,14 @@ export function NotificationsDropdown() {
                 }}
               >
                 View All Statements
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full text-xs"
+                onClick={handleClearAll}
+              >
+                Clear All
               </Button>
             </div>
           </>

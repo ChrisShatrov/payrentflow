@@ -29,6 +29,7 @@ interface Unit {
   tenant_id: string | null;
   first_month_paid?: boolean;
   move_in_date?: string | null;
+  addons?: Array<{name: string, price: number}> | null;
   tenantName?: string | null;
   tenantEmail?: string | null;
 }
@@ -103,7 +104,7 @@ export function PropertyDetailSheet({ property, open, onOpenChange, onPropertyUp
     try {
       const { data: unitsData, error: unitsError } = await supabase
         .from("units")
-        .select("id, unit_number, monthly_rent, due_day, allow_split_payment, split_payment_fee, late_fee_amount, daily_late_fee, tenant_id, first_month_paid, move_in_date")
+        .select("id, unit_number, monthly_rent, due_day, allow_split_payment, split_payment_fee, late_fee_amount, daily_late_fee, tenant_id, first_month_paid, move_in_date, addons")
         .eq("property_id", property.id)
         .order("unit_number");
 

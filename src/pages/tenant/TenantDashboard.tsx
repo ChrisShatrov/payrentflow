@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { format, differenceInDays, parseISO, startOfDay } from "date-fns";
+import { format, differenceInDays, parseISO, startOfDay, isToday } from "date-fns";
 import { PaymentModal } from "@/components/tenant/PaymentModal";
 import { DocumentsModal } from "@/components/tenant/DocumentsModal";
 import { MaintenanceModal } from "@/components/tenant/MaintenanceModal";
@@ -42,6 +42,7 @@ interface UnitData {
   late_fee_amount?: number;
   first_month_paid?: boolean;
   move_in_date?: string | null;
+  addons?: Array<{name: string, price: number}> | null;
   property: {
     name: string;
     address: string;
@@ -247,6 +248,7 @@ export default function TenantDashboard() {
           first_month_paid,
           move_in_date,
           tenant_id,
+          addons,
           property:properties (
             name,
             address,
@@ -821,8 +823,8 @@ export default function TenantDashboard() {
         }
 
         // Fetch recent payments (limit to 2-3 for dashboard)
-        // Filter out old pending payments (older than 1 hour) - these are likely abandoned
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        // Automatically mark old pending payments as failed (abandoned)
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
         const { data: paymentsData } = await supabase
           .from("payments")
           .select("*")
@@ -831,12 +833,41 @@ export default function TenantDashboard() {
           .limit(10); // Fetch more to filter, then limit to 3
 
         if (paymentsData) {
-          // Filter out old pending payments
+          // Find old pending payments and mark them as failed (abandoned)
+          const oldPendingPayments = paymentsData.filter(
+            (p) => (p.status === "pending" || p.status === "processing") && new Date(p.created_at) < thirtyMinutesAgo
+          );
+
+          if (oldPendingPayments.length > 0) {
+            const oldPaymentIds = oldPendingPayments.map((p) => p.id);
+            const { error: updateError } = await supabase
+              .from("payments")
+              .update({ status: "failed" })
+              .in("id", oldPaymentIds);
+
+            if (updateError) {
+              console.error("Error marking old pending payments as failed:", updateError);
+            } else {
+              console.log(`Marked ${oldPendingPayments.length} abandoned payment(s) as failed`);
+              // Remove the old payments from the list since they're now failed
+              paymentsData.forEach((p) => {
+                if (oldPaymentIds.includes(p.id)) {
+                  p.status = "failed";
+                }
+              });
+            }
+          }
+
+          // Filter out old pending payments and failed payments from display
           const filteredPayments = paymentsData.filter((p) => {
-            // Show all completed/failed payments
-            if (p.status !== "pending") return true;
-            // For pending payments, only show if created within last hour
-            return new Date(p.created_at) > new Date(oneHourAgo);
+            // Show all completed payments
+            if (p.status === "completed") return true;
+            // Show recent pending payments (less than 30 minutes old)
+            if (p.status === "pending" || p.status === "processing") {
+              return new Date(p.created_at) >= thirtyMinutesAgo;
+            }
+            // Don't show failed payments in recent transactions
+            return false;
           }).slice(0, 3); // Limit to 3 most recent after filtering
           
           setRecentPayments(filteredPayments);
@@ -1205,6 +1236,13 @@ export default function TenantDashboard() {
 
   const getNextDueDate = () => {
     if (!unit) return null;
+    
+    // If there's a balance (rentDue > 0), show today's date
+    // This ensures the "Due Date" card shows today when there's an outstanding balance
+    if (rentDue > 0) {
+      return startOfDay(new Date());
+    }
+    
     const today = new Date();
     const currentMonth = format(today, "MM/yyyy");
     
@@ -1274,6 +1312,10 @@ export default function TenantDashboard() {
 
   const isPastDue = () => {
     if (!unit) return false;
+    
+    // If there's a balance (rentDue > 0), it's past due
+    // This ensures move-in tenants with balance are shown as past due
+    if (rentDue > 0) return true;
     
     const today = startOfDay(new Date());
     const currentMonth = format(new Date(), "MM/yyyy");
@@ -1413,49 +1455,7 @@ export default function TenantDashboard() {
     { label: "Help", icon: HelpCircle, action: () => handleQuickAction("Help") },
   ];
 
-  const daysUntilDue = getDaysUntilDue();
-  const nextDueDate = getNextDueDate();
-  const pastDue = isPastDue();
-  
-  const canPay = canMakePayment();
-  
-  // Calculate days until payment is available (for button text)
-  const getDaysUntilPaymentAvailable = () => {
-    if (!currentStatement || !unit || currentStatement.status === "paid") return null;
-    if (pastDue) return null; // Can always pay if past due
-    
-    // DEMO MODE: Payment is always available (return null means available now)
-    // TODO: Remove this for production - restore the 3-day restriction
-    return null;
-    
-    // const today = startOfDay(new Date());
-    // const [month, year] = currentStatement.period_month.split('/').map(Number);
-    // const currentMonth = format(new Date(), "MM/yyyy");
-    // const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
-    
-    // // Check if this is the move-in month
-    // const isMoveInMonth = unit.move_in_date &&
-    //   year === currentYear &&
-    //   month === currentMonthNum;
-
-    // let statementDueDate: Date;
-    // if (isMoveInMonth && unit.move_in_date) {
-    //   // For move-in month: due date is move-in date (or today if already moved in)
-    //   const moveInDate = startOfDay(new Date(unit.move_in_date));
-    //   statementDueDate = moveInDate > today ? moveInDate : today;
-    // } else {
-    //   // Standard due date
-    //   statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
-    // }
-    
-    // const daysUntilDue = differenceInDays(statementDueDate, today);
-    // return daysUntilDue > 3 ? daysUntilDue - 3 : null;
-  };
-  const daysUntilPaymentAvailable = getDaysUntilPaymentAvailable();
-
-  // Calculate late fee breakdown
-  // Always calculate based on current date and move-in date logic, not stored values
-  // This ensures late fees are never shown when they shouldn't apply (e.g., on move-in date)
+  // Calculate late fee breakdown (needed for rentDue calculation)
   const calculateLateFeeBreakdown = () => {
     if (!currentStatement || !unit || currentStatement.status === "paid") {
       return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
@@ -1547,7 +1547,6 @@ export default function TenantDashboard() {
     return { flatFee, dailyFee, totalLateFee: calculatedTotal };
   };
 
-  // Calculate late fee breakdown (needed for rentDue calculation)
   const { flatFee, dailyFee, totalLateFee } = calculateLateFeeBreakdown();
   
   // Calculate rent due amount
@@ -1583,6 +1582,46 @@ export default function TenantDashboard() {
       rentDue = baseAmount;
     }
   }
+
+  const daysUntilDue = getDaysUntilDue();
+  const nextDueDate = getNextDueDate();
+  const pastDue = isPastDue();
+  
+  const canPay = canMakePayment();
+  
+  // Calculate days until payment is available (for button text)
+  const getDaysUntilPaymentAvailable = () => {
+    if (!currentStatement || !unit || currentStatement.status === "paid") return null;
+    if (pastDue) return null; // Can always pay if past due
+    
+    // DEMO MODE: Payment is always available (return null means available now)
+    // TODO: Remove this for production - restore the 3-day restriction
+    return null;
+    
+    // const today = startOfDay(new Date());
+    // const [month, year] = currentStatement.period_month.split('/').map(Number);
+    // const currentMonth = format(new Date(), "MM/yyyy");
+    // const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+    
+    // // Check if this is the move-in month
+    // const isMoveInMonth = unit.move_in_date &&
+    //   year === currentYear &&
+    //   month === currentMonthNum;
+
+    // let statementDueDate: Date;
+    // if (isMoveInMonth && unit.move_in_date) {
+    //   // For move-in month: due date is move-in date (or today if already moved in)
+    //   const moveInDate = startOfDay(new Date(unit.move_in_date));
+    //   statementDueDate = moveInDate > today ? moveInDate : today;
+    // } else {
+    //   // Standard due date
+    //   statementDueDate = startOfDay(new Date(year, month - 1, unit.due_day));
+    // }
+    
+    // const daysUntilDue = differenceInDays(statementDueDate, today);
+    // return daysUntilDue > 3 ? daysUntilDue - 3 : null;
+  };
+  const daysUntilPaymentAvailable = getDaysUntilPaymentAvailable();
 
   if (loading) {
     return (
@@ -1780,6 +1819,21 @@ export default function TenantDashboard() {
                 );
               }
               
+              // Add addons if unit has them
+              const unitAddons = (unit?.addons as Array<{name: string, price: number}> | null) || [];
+              if (Array.isArray(unitAddons) && unitAddons.length > 0) {
+                unitAddons.forEach((addon, index) => {
+                  feeItems.push(
+                    <div key={`addon-${index}`}>
+                      <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>{addon.name}</p>
+                      <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
+                        ${addon.price.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  );
+                });
+              }
+              
               // Utilities
               if (Number(currentStatement.additional_fees) > 0) {
                 feeItems.push(
@@ -1922,12 +1976,20 @@ export default function TenantDashboard() {
                 </span>
               )}
             </div>
-            <p className="text-sm text-muted-foreground mb-1">Next Due Date</p>
+            <p className="text-sm text-muted-foreground mb-1">Due Date</p>
             <p className={`text-2xl font-bold ${pastDue ? 'text-destructive' : 'text-foreground'}`}>
-              {nextDueDate ? format(nextDueDate, "MMM d") : "—"}
+              {nextDueDate && rentDue > 0 && isToday(nextDueDate) 
+                ? "Today" 
+                : nextDueDate ? format(nextDueDate, "MMM d") : "—"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {daysUntilDue > 0 ? `In ${daysUntilDue} days` : daysUntilDue === 0 ? "Due today" : "Due soon"}
+              {rentDue > 0 && nextDueDate && isToday(nextDueDate) 
+                ? "Due today" 
+                : daysUntilDue > 0 
+                  ? `In ${daysUntilDue} days` 
+                  : daysUntilDue === 0 
+                    ? "Due today" 
+                    : "Due soon"}
             </p>
           </Card>
 
@@ -2091,7 +2153,8 @@ export default function TenantDashboard() {
           late_fee_type: unit.late_fee_type || '',
           late_fee_amount: unit.late_fee_amount || 0,
           daily_late_fee: unit.daily_late_fee,
-          move_in_date: unit.move_in_date
+          move_in_date: unit.move_in_date,
+          addons: (unit.addons as Array<{name: string, price: number}> | null) || null
         } : null}
       />
 

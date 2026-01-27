@@ -39,6 +39,7 @@ interface PaymentModalProps {
     late_fee_amount: number;
     daily_late_fee: number;
     move_in_date?: string | null;
+    addons?: Array<{name: string, price: number}> | null;
   } | null;
 }
 
@@ -69,7 +70,7 @@ export function PaymentModal({
   const [paymentAmount, setPaymentAmount] = useState<string>("");
   const [pastDueStatements, setPastDueStatements] = useState<PastDueStatement[]>([]);
   const [pastDueLateFee, setPastDueLateFee] = useState(0);
-  const [unit, setUnit] = useState<{ due_day: number; late_fee_type: string; late_fee_amount: number; daily_late_fee: number; split_payment_fee?: number | null; first_month_paid?: boolean; move_in_date?: string | null } | null>(null);
+  const [unit, setUnit] = useState<{ due_day: number; late_fee_type: string; late_fee_amount: number; daily_late_fee: number; split_payment_fee?: number | null; first_month_paid?: boolean; move_in_date?: string | null; addons?: Array<{name: string, price: number}> | null } | null>(null);
   const { toast } = useToast();
 
   // Fetch past due statements and unit info when modal opens and split payment is allowed
@@ -113,10 +114,10 @@ export function PaymentModal({
     if (!statement || !user) return;
 
     try {
-      // Fetch unit info including first_month_paid and move_in_date
+      // Fetch unit info including first_month_paid, move_in_date, and addons
       const { data: unitData } = await supabase
         .from("units")
-        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, split_payment_fee, first_month_paid, move_in_date")
+        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, split_payment_fee, first_month_paid, move_in_date, addons")
         .eq("tenant_id", user.id)
         .maybeSingle();
 
@@ -365,18 +366,52 @@ export function PaymentModal({
     try {
       const { data: existingPayments } = await supabase
         .from("payments")
-        .select("id, status")
+        .select("id, status, created_at")
         .eq("statement_id", statement.id)
         .in("status", ["pending", "processing"])
-        .limit(1);
+        .limit(10); // Get all pending payments to check their age
 
       if (existingPayments && existingPayments.length > 0) {
-        toast({
-          title: "Payment Already in Progress",
-          description: "You already have a pending payment for this statement. Please wait for it to complete or cancel it first.",
-          variant: "destructive",
-        });
-        return;
+        // Check if any pending payments are old (older than 30 minutes) - these are likely abandoned
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+        const oldPayments = existingPayments.filter(
+          (p) => new Date(p.created_at) < thirtyMinutesAgo
+        );
+        const recentPayments = existingPayments.filter(
+          (p) => new Date(p.created_at) >= thirtyMinutesAgo
+        );
+
+        // If there are old pending payments, mark them as failed (abandoned)
+        if (oldPayments.length > 0) {
+          const oldPaymentIds = oldPayments.map((p) => p.id);
+          const { error: updateError } = await supabase
+            .from("payments")
+            .update({ status: "failed" })
+            .in("id", oldPaymentIds);
+
+          if (updateError) {
+            console.error("Error marking old payments as failed:", updateError);
+          } else {
+            console.log(`Marked ${oldPayments.length} abandoned payment(s) as failed`);
+            toast({
+              title: "Previous Payment Canceled",
+              description: `Your previous payment attempt was canceled. You can now proceed with a new payment.`,
+              variant: "default",
+            });
+          }
+        }
+
+        // If there are still recent pending payments (less than 30 minutes old), block the new payment
+        if (recentPayments.length > 0) {
+          toast({
+            title: "Payment Already in Progress",
+            description: "You have a recent payment in progress. Please wait for it to complete or try again in a few minutes.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        // If we only had old payments and they've been marked as failed, continue with new payment
       }
     } catch (error) {
       console.error("Error checking existing payments:", error);
@@ -558,31 +593,41 @@ export function PaymentModal({
                       return difference > (monthlyRent * 0.01);
                     };
                     
-                    const isProrated = isProratedRent(Number(statement.base_rent), monthly_rent);
+                    const unitAddons = (unitProp?.addons as Array<{name: string, price: number}> | null) || unit?.addons || [];
+                    const addonsArray = Array.isArray(unitAddons) ? unitAddons : [];
+                    const addonTotal = addonsArray.reduce((sum, addon) => sum + addon.price, 0);
                     
-                    if (isProrated && monthly_rent) {
-                      // Show both Base Rent and Prorated Rent when prorated
-                      return (
-                        <>
+                    // statement.base_rent already includes addons, so we need to subtract them for display
+                    const baseRentWithoutAddons = Number(statement.base_rent) - addonTotal;
+                    const isProrated = isProratedRent(baseRentWithoutAddons, monthly_rent);
+                    
+                    return (
+                      <>
+                        {isProrated && monthly_rent ? (
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-muted-foreground">Monthly Rent</span>
+                              <span>${Number(monthly_rent).toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-muted-foreground">Prorated Rent</span>
+                              <span>${baseRentWithoutAddons.toFixed(2)}</span>
+                            </div>
+                          </>
+                        ) : (
                           <div className="flex justify-between text-sm">
                             <span className="text-muted-foreground">Base Rent</span>
-                            <span>${Number(monthly_rent).toFixed(2)}</span>
+                            <span>${baseRentWithoutAddons.toFixed(2)}</span>
                           </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">Prorated Rent</span>
-                            <span>${Number(statement.base_rent).toFixed(2)}</span>
+                        )}
+                        {addonsArray.length > 0 && addonsArray.map((addon, index) => (
+                          <div key={`addon-${index}`} className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">{addon.name}</span>
+                            <span>${addon.price.toFixed(2)}</span>
                           </div>
-                        </>
-                      );
-                    } else {
-                      // Show only Base Rent when not prorated
-                      return (
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Base Rent</span>
-                          <span>${Number(statement.base_rent).toFixed(2)}</span>
-                        </div>
-                      );
-                    }
+                        ))}
+                      </>
+                    );
                   })()}
                   
                   {fees.lateFeeAmount > 0 && (

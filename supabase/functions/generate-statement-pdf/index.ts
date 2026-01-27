@@ -68,6 +68,7 @@ serve(async (req) => {
           late_fee_type,
           tenant_id,
           property_id,
+          addons,
           properties!inner(id, name, address, landlord_id),
           profiles(full_name, email, phone)
         )
@@ -418,6 +419,37 @@ serve(async (req) => {
         font: helvetica,
         color: textColor,
       });
+    }
+
+    // Addons rows
+    const unitAddons = (unit.addons as Array<{name: string, price: number}> | null) || [];
+    if (Array.isArray(unitAddons) && unitAddons.length > 0) {
+      for (const addon of unitAddons) {
+        y -= 10;
+        page.drawLine({
+          start: { x: 50, y },
+          end: { x: width - 50, y },
+          thickness: 1,
+          color: rgb(0.9, 0.9, 0.9),
+        });
+
+        y -= 25;
+        page.drawText(addon.name, {
+          x: 50,
+          y,
+          size: 11,
+          font: helvetica,
+          color: textColor,
+        });
+
+        page.drawText(formatCurrency(addon.price), {
+          x: width - 100,
+          y,
+          size: 11,
+          font: helvetica,
+          color: textColor,
+        });
+      }
     }
 
     // Additional fees row

@@ -36,6 +36,7 @@ import { Plus, Check, ChevronsUpDown } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { AddonChip } from "./AddonChip";
 
 interface Tenant {
   id: string;
@@ -64,6 +65,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
   const [dailyLateFee, setDailyLateFee] = useState("0");
   const [moveInDate, setMoveInDate] = useState("");
   const [firstMonthPaid, setFirstMonthPaid] = useState(false);
+  const [addons, setAddons] = useState<Array<{name: string, price: number}>>([]);
 
   useEffect(() => {
     if (open) {
@@ -202,6 +204,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
         daily_late_fee: parseFloat(dailyLateFee) || 0,
         move_in_date: tenantId && tenantId !== "__none__" ? moveInDate : null,
         first_month_paid: tenantId && tenantId !== "__none__" ? firstMonthPaid : false,
+        addons: addons.length > 0 ? addons : [],
       }).select("id").single();
 
       if (error) throw error;
@@ -267,6 +270,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
     setTenantId("");
     setMonthlyRent("");
     setDueDay("1");
+    setAddons([]);
     setAllowSplitPayment(false);
     setSplitPaymentFee("30.00");
     setLateFeeAmount("0");
@@ -472,6 +476,78 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Unit Addons */}
+            <div className="grid gap-2">
+              <Label>Unit Addons (optional)</Label>
+              <div className="flex flex-wrap gap-2">
+                <AddonChip
+                  name="Garage"
+                  selected={addons.some(a => a.name === "Garage")}
+                  price={addons.find(a => a.name === "Garage")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Parking spot"
+                  selected={addons.some(a => a.name === "Parking spot")}
+                  price={addons.find(a => a.name === "Parking spot")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Covered parking spot"
+                  selected={addons.some(a => a.name === "Covered parking spot")}
+                  price={addons.find(a => a.name === "Covered parking spot")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Utilities"
+                  selected={addons.some(a => a.name === "Utilities")}
+                  price={addons.find(a => a.name === "Utilities")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+                <AddonChip
+                  name="Internet"
+                  selected={addons.some(a => a.name === "Internet")}
+                  price={addons.find(a => a.name === "Internet")?.price || null}
+                  onToggle={(name, price) => {
+                    if (price !== null) {
+                      setAddons(prev => [...prev.filter(a => a.name !== name), { name, price }]);
+                    } else {
+                      setAddons(prev => prev.filter(a => a.name !== name));
+                    }
+                  }}
+                />
+              </div>
+              {addons.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Addon total: ${addons.reduce((sum, addon) => sum + addon.price, 0).toFixed(2)}/month
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4">
