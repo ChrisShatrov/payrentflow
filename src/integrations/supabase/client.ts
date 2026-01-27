@@ -21,13 +21,35 @@ if (!SUPABASE_URL) {
     'For production, set it in your hosting platform (Vercel, Netlify, etc.) and rebuild.'
   );
 } else {
+  // Check if it looks like a hash/ID instead of a URL
+  if (!SUPABASE_URL.startsWith('http://') && !SUPABASE_URL.startsWith('https://')) {
+    console.error(
+      '❌ INVALID SUPABASE URL FORMAT!\n' +
+      `Current value: ${SUPABASE_URL.substring(0, 50)}...\n` +
+      'This looks like a project ID or hash, not a full URL!\n\n' +
+      'VITE_SUPABASE_URL must be a complete URL, not just an ID.\n' +
+      'Correct format: https://<project-id>.supabase.co\n' +
+      'Example: https://heismaqehgqxcrndtqmz.supabase.co\n\n' +
+      'To find your Supabase URL:\n' +
+      '1. Go to your Supabase Dashboard\n' +
+      '2. Select your project\n' +
+      '3. Go to Settings → API\n' +
+      '4. Copy the "Project URL" (not the Project ID)\n' +
+      '5. Set that full URL as VITE_SUPABASE_URL in Vercel\n' +
+      '6. Redeploy your site'
+    );
+  }
   // Check for common URL issues
-  if (SUPABASE_URL.includes('.supabase.c') && !SUPABASE_URL.includes('.supabase.co')) {
+  else if (SUPABASE_URL.includes('.supabase.c') && !SUPABASE_URL.includes('.supabase.co')) {
     console.error(
       '❌ INVALID SUPABASE URL DETECTED!\n' +
       `Current URL: ${SUPABASE_URL}\n` +
-      'The URL is missing ".co" - it should end with ".supabase.co" not ".supabase.c"\n' +
-      'Fix this in your hosting platform environment variables and REDEPLOY the site.\n' +
+      'The URL is missing ".co" - it should end with ".supabase.co" not ".supabase.c"\n\n' +
+      '⚠️ IMPORTANT: Vite environment variables are embedded at BUILD TIME!\n' +
+      'If you just updated VITE_SUPABASE_URL in your hosting platform:\n' +
+      '1. Verify the value ends with ".supabase.co" (not ".supabase.c")\n' +
+      '2. You MUST trigger a new BUILD/DEPLOYMENT for the change to take effect\n' +
+      '3. Just saving the env var is NOT enough - the site needs to be rebuilt\n\n' +
       'Expected format: https://heismaqehgqxcrndtqmz.supabase.co'
     );
   } else if (SUPABASE_URL.endsWith('.supabase.co')) {
