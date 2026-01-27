@@ -29,7 +29,7 @@ import { supabase } from "@/integrations/supabase/client";
 const signUpSchema = z.object({
   fullName: z.string().min(2, "Full name must be at least 2 characters").max(100),
   email: z.string().email("Please enter a valid email"),
-  phone: z.string().min(10, "Please enter a valid phone number").max(20),
+  phone: z.string().min(1, "Phone number is required").max(30), // More lenient - just needs a value
   password: z.string().min(6, "Password must be at least 6 characters"),
   confirmPassword: z.string().min(6, "Password must be at least 6 characters"),
   role: z.enum(["tenant", "admin"]),
@@ -295,15 +295,40 @@ export default function Auth() {
     if (!isSignUp) return true; // Sign in form doesn't need this validation
     
     // Check all required fields are filled
-    if (!formData.fullName.trim()) return false;
-    if (!formData.email.trim()) return false;
-    if (!formData.phone.trim()) return false;
-    if (!formData.password.trim()) return false;
-    if (!formData.confirmPassword.trim()) return false;
-    if (!formData.agreedToTerms) return false; // Terms must be agreed to
+    if (!formData.fullName.trim()) {
+      console.log('[SignUp] Validation failed: Full name is empty');
+      return false;
+    }
+    if (!formData.email.trim()) {
+      console.log('[SignUp] Validation failed: Email is empty');
+      return false;
+    }
+    if (!formData.phone.trim()) {
+      console.log('[SignUp] Validation failed: Phone is empty');
+      return false;
+    }
+    if (!formData.password.trim()) {
+      console.log('[SignUp] Validation failed: Password is empty');
+      return false;
+    }
+    if (!formData.confirmPassword.trim()) {
+      console.log('[SignUp] Validation failed: Confirm password is empty');
+      return false;
+    }
+    if (!formData.agreedToTerms) {
+      console.log('[SignUp] Validation failed: Terms not agreed');
+      return false;
+    }
     
     // Validate using schema
     const result = signUpSchema.safeParse(formData);
+    if (!result.success) {
+      console.log('[SignUp] Schema validation failed:', result.error.errors);
+      // Log specific validation issues
+      result.error.errors.forEach(err => {
+        console.log(`[SignUp] - ${err.path.join('.')}: ${err.message}`);
+      });
+    }
     return result.success;
   };
 
@@ -1003,12 +1028,41 @@ export default function Auth() {
               type="submit"
               disabled={loading || (isSignUp && !isSignUpFormValid())}
               className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-semibold text-base mt-6 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={isSignUp && !isSignUpFormValid() ? "Please fill in all required fields correctly" : undefined}
             >
               {loading ? (
                 <Loader2 className="animate-spin mr-2" size={20} />
               ) : null}
               {isSignUp ? "Sign Up" : "Login"}
             </Button>
+            {isSignUp && !isSignUpFormValid() && (
+              <p className="text-sm text-muted-foreground mt-2 text-center">
+                {(() => {
+                  if (!formData.fullName.trim() || formData.fullName.trim().length < 2) {
+                    return "Full name must be at least 2 characters";
+                  }
+                  if (!formData.email.trim() || !formData.email.includes("@")) {
+                    return "Please enter a valid email address";
+                  }
+                  if (!formData.phone.trim()) {
+                    return "Phone number is required";
+                  }
+                  if (!formData.password.trim() || formData.password.length < 6) {
+                    return "Password must be at least 6 characters";
+                  }
+                  if (!formData.confirmPassword.trim() || formData.confirmPassword.length < 6) {
+                    return "Please confirm your password";
+                  }
+                  if (formData.password !== formData.confirmPassword) {
+                    return "Passwords do not match";
+                  }
+                  if (!formData.agreedToTerms) {
+                    return "Please agree to the Terms and Conditions";
+                  }
+                  return "Please check all fields";
+                })()}
+              </p>
+            )}
           </form>
 
           <p className="text-center text-muted-foreground mt-6 hidden">

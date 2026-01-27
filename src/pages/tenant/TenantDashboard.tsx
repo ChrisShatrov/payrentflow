@@ -874,10 +874,28 @@ export default function TenantDashboard() {
 
           // Calculate remaining balance for current statement after partial payments
           if (!currentStatement) {
-            // No current statement means all statements are paid or none exist yet
-            console.log("[Total Rent Due] No current statement, balance is 0");
-            setRemainingBalance(0);
-          } else if (currentStatement && unitData) {
+            // No current statement - but check if there are any unpaid statements we might have missed
+            console.log("[Total Rent Due] No current statement set, checking for any unpaid statements");
+            const { data: anyUnpaidStatements } = await supabase
+              .from("statements")
+              .select("*")
+              .eq("unit_id", unitData.id)
+              .in("status", ["unpaid", "overdue", "partial"])
+              .order("period_month", { ascending: true })
+              .limit(1);
+            
+            if (anyUnpaidStatements && anyUnpaidStatements.length > 0) {
+              console.log("[Total Rent Due] Found unpaid statement that wasn't set as current:", anyUnpaidStatements[0].period_month);
+              setCurrentStatement(anyUnpaidStatements[0]);
+              // Continue to calculate balance below
+            } else {
+              console.log("[Total Rent Due] No unpaid statements found, balance is 0");
+              setRemainingBalance(0);
+            }
+          }
+          
+          // Calculate balance if we have a current statement
+          if (currentStatement && unitData) {
             // If statement is paid, balance is 0
             if (currentStatement.status === "paid") {
               console.log("[Total Rent Due] Statement is paid, balance is 0");
@@ -925,9 +943,13 @@ export default function TenantDashboard() {
               } else {
                 // No payments made yet, remaining balance = total_due
                 console.log("[Total Rent Due] No payments yet, using total_due:", currentStatement.total_due);
-                setRemainingBalance(Number(currentStatement.total_due));
+                const balance = Number(currentStatement.total_due) || 0;
+                setRemainingBalance(balance);
               }
             }
+          } else if (!currentStatement) {
+            // Double-check: if we still don't have a current statement, set balance to 0
+            setRemainingBalance(0);
           } else {
             setRemainingBalance(null);
           }

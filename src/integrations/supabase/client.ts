@@ -5,6 +5,14 @@ import type { Database } from './types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+// Always log the URL for debugging (even if undefined)
+console.log('[SUPABASE-CONFIG] Environment check:', {
+  SUPABASE_URL: SUPABASE_URL || 'NOT SET',
+  hasPublishableKey: !!SUPABASE_PUBLISHABLE_KEY,
+  urlLength: SUPABASE_URL?.length || 0,
+  urlEndsWith: SUPABASE_URL?.slice(-10) || 'N/A'
+});
+
 // Validate environment variables
 if (!SUPABASE_URL) {
   console.error(
@@ -19,10 +27,13 @@ if (!SUPABASE_URL) {
       '❌ INVALID SUPABASE URL DETECTED!\n' +
       `Current URL: ${SUPABASE_URL}\n` +
       'The URL is missing ".co" - it should end with ".supabase.co" not ".supabase.c"\n' +
-      'Fix this in your hosting platform environment variables and REDEPLOY the site.'
+      'Fix this in your hosting platform environment variables and REDEPLOY the site.\n' +
+      'Expected format: https://heismaqehgqxcrndtqmz.supabase.co'
     );
+  } else if (SUPABASE_URL.endsWith('.supabase.co')) {
+    console.log(`✅ Supabase URL configured correctly: ${SUPABASE_URL}`);
   } else {
-    console.log(`✅ Supabase URL configured: ${SUPABASE_URL}`);
+    console.warn(`⚠️ Supabase URL format may be incorrect: ${SUPABASE_URL}`);
   }
 }
 
