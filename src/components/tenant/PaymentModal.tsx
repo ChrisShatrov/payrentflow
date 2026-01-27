@@ -16,7 +16,7 @@ import { CreditCard, Building2, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { startOfDay } from "date-fns";
+import { startOfDay, differenceInDays } from "date-fns";
 
 interface PaymentModalProps {
   open: boolean;
@@ -28,10 +28,18 @@ interface PaymentModalProps {
     late_fee: number;
     additional_fees: number;
     period_month: string;
+    status?: string;
   } | null;
   allowSplitPayment?: boolean;
   splitPaymentFee?: number | null;
   monthly_rent?: number | null;
+  unit?: {
+    due_day: number;
+    late_fee_type: string;
+    late_fee_amount: number;
+    daily_late_fee: number;
+    move_in_date?: string | null;
+  } | null;
 }
 
 // Fee constants (must match edge function)
@@ -52,7 +60,8 @@ export function PaymentModal({
   statement,
   allowSplitPayment = false,
   splitPaymentFee = null,
-  monthly_rent = null
+  monthly_rent = null,
+  unit: unitProp = null
 }: PaymentModalProps) {
   const { user } = useAuth();
   const [paymentMethod, setPaymentMethod] = useState<"card" | "ach">("card");
@@ -60,7 +69,7 @@ export function PaymentModal({
   const [paymentAmount, setPaymentAmount] = useState<string>("");
   const [pastDueStatements, setPastDueStatements] = useState<PastDueStatement[]>([]);
   const [pastDueLateFee, setPastDueLateFee] = useState(0);
-  const [unit, setUnit] = useState<{ due_day: number; late_fee_type: string; late_fee_amount: number; daily_late_fee: number; split_payment_fee: number | null; first_month_paid?: boolean } | null>(null);
+  const [unit, setUnit] = useState<{ due_day: number; late_fee_type: string; late_fee_amount: number; daily_late_fee: number; split_payment_fee?: number | null; first_month_paid?: boolean; move_in_date?: string | null } | null>(null);
   const { toast } = useToast();
 
   // Fetch past due statements and unit info when modal opens and split payment is allowed
@@ -72,16 +81,42 @@ export function PaymentModal({
       setPastDueLateFee(0);
       setPaymentAmount("");
     }
-  }, [open, allowSplitPayment, statement, user]);
+    
+    // Use unit prop if provided, otherwise fetch it
+    if (open && unitProp) {
+      setUnit(unitProp);
+    } else if (open && !allowSplitPayment && statement && user) {
+      // Fetch unit info for late fee calculation even if split payment is not allowed
+      fetchUnitForLateFee();
+    }
+  }, [open, allowSplitPayment, statement, user, unitProp]);
+  
+  const fetchUnitForLateFee = async () => {
+    if (!statement || !user) return;
+    
+    try {
+      const { data: unitData } = await supabase
+        .from("units")
+        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, move_in_date")
+        .eq("tenant_id", user.id)
+        .maybeSingle();
+      
+      if (unitData) {
+        setUnit(unitData);
+      }
+    } catch (error) {
+      console.error("Error fetching unit for late fee calculation:", error);
+    }
+  };
 
   const fetchPastDueAndUnit = async () => {
     if (!statement || !user) return;
 
     try {
-      // Fetch unit info including first_month_paid
+      // Fetch unit info including first_month_paid and move_in_date
       const { data: unitData } = await supabase
         .from("units")
-        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, split_payment_fee, first_month_paid")
+        .select("due_day, late_fee_type, late_fee_amount, daily_late_fee, split_payment_fee, first_month_paid, move_in_date")
         .eq("tenant_id", user.id)
         .maybeSingle();
 
@@ -166,9 +201,84 @@ export function PaymentModal({
     }
   };
 
+  // Calculate correct late fee for current statement (same logic as TenantDashboard)
+  const calculateCurrentLateFee = (): number => {
+    if (!statement || !unit || statement.status === "paid") {
+      return 0;
+    }
+    
+    if (!unit.due_day || !unit.late_fee_type) {
+      return 0;
+    }
+    
+    if (!statement.period_month) {
+      return 0;
+    }
+    
+    const today = new Date();
+    const [month, year] = statement.period_month.split('/');
+    
+    // Check if this is the move-in month
+    const isMoveInMonth = unit.move_in_date && 
+      parseInt(year) === new Date(unit.move_in_date).getFullYear() &&
+      parseInt(month) === new Date(unit.move_in_date).getMonth() + 1;
+    
+    // Calculate due date: move-in month uses move-in date + 1 day, otherwise standard due day
+    let dueDate: Date;
+    if (isMoveInMonth && unit.move_in_date) {
+      const moveInDate = startOfDay(new Date(unit.move_in_date));
+      const moveInDueDate = new Date(moveInDate);
+      moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+      dueDate = moveInDueDate;
+    } else {
+      dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+    }
+    
+    // Normalize dates to start of day for accurate calculation
+    const todayStart = startOfDay(today);
+    const dueDateStart = startOfDay(dueDate);
+    
+    // If today is the move-in date, no late fees should apply
+    if (isMoveInMonth && unit.move_in_date) {
+      const moveInDateStart = startOfDay(new Date(unit.move_in_date));
+      if (todayStart.getTime() === moveInDateStart.getTime()) {
+        return 0;
+      }
+    }
+    
+    // If not past due date, no late fees
+    if (todayStart <= dueDateStart) {
+      return 0;
+    }
+    
+    const daysLate = differenceInDays(todayStart, dueDateStart);
+    
+    // Calculate flat late fee
+    let flatFee = 0;
+    if (unit.late_fee_type === 'flat' && unit.late_fee_amount) {
+      flatFee = Number(unit.late_fee_amount);
+    } else if (unit.late_fee_type === 'percent' && unit.late_fee_amount) {
+      flatFee = (Number(statement.base_rent) * Number(unit.late_fee_amount)) / 100;
+    }
+    
+    // Daily late fee applies starting from day 2 (daysLate - 1)
+    const daysForDailyFee = Math.max(0, daysLate - 1);
+    const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
+    const dailyFee = daysForDailyFee * dailyLateFeeRate;
+    
+    return flatFee + dailyFee;
+  };
+
   // Calculate fees dynamically
   const calculateFees = () => {
     if (!statement) return { paymentMethodFee: 0, serviceCharge: SERVICE_CHARGE, splitFee: 0, total: 0, currentMonthAmount: 0, pastDueAmount: 0, lateFeeAmount: 0, isFullPayment: false };
+
+    // Calculate correct late fee (not from stored value)
+    const calculatedLateFee = calculateCurrentLateFee();
+    
+    // Calculate base amount without stale late fees
+    const baseAmountWithoutLateFee = Number(statement.base_rent) + (Number(statement.additional_fees) || 0);
+    const correctBaseAmount = baseAmountWithoutLateFee + calculatedLateFee;
 
     let baseAmount = 0;
     let currentMonthAmount = 0;
@@ -221,8 +331,8 @@ export function PaymentModal({
         isFullPayment,
       };
     } else {
-      // Standard payment: pay full statement amount
-      baseAmount = Number(statement.total_due);
+      // Standard payment: use calculated base amount (not stored total_due which may have stale late fees)
+      baseAmount = correctBaseAmount;
       
       let paymentMethodFee = 0;
       if (paymentMethod === "card") {
@@ -240,7 +350,7 @@ export function PaymentModal({
         total: Math.round(total * 100) / 100,
         currentMonthAmount: baseAmount,
         pastDueAmount: 0,
-        lateFeeAmount: 0,
+        lateFeeAmount: calculatedLateFee,
         isFullPayment: true,
       };
     }
@@ -475,11 +585,11 @@ export function PaymentModal({
                     }
                   })()}
                   
-                  {Number(statement.late_fee) > 0 && (
+                  {fees.lateFeeAmount > 0 && (
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Late Fee</span>
                       <span className="text-destructive">
-                        ${Number(statement.late_fee).toFixed(2)}
+                        ${fees.lateFeeAmount.toFixed(2)}
                       </span>
                     </div>
                   )}
@@ -495,7 +605,7 @@ export function PaymentModal({
 
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Subtotal</span>
-                    <span>${Number(statement.total_due).toFixed(2)}</span>
+                    <span>${(Number(statement.base_rent) + (Number(statement.additional_fees) || 0) + fees.lateFeeAmount).toFixed(2)}</span>
                   </div>
                 </>
               )}

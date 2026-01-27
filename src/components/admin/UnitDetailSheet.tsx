@@ -435,7 +435,8 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
           const { data: regeneratedStatement, error: regenerateError } = await supabase.functions.invoke("generate-statement", {
             body: { 
               unit_id: unit.id, 
-              period_month: periodMonth 
+              period_month: periodMonth,
+              skip_email_notification: true // Skip email since this is just a correction, not a new statement
             }
           });
           

@@ -42,9 +42,9 @@ serve(async (req) => {
   }
 
   try {
-    const { unit_id, period_month } = await req.json()
+    const { unit_id, period_month, skip_email_notification } = await req.json()
     
-    console.log(`Generating statement for unit ${unit_id}, period ${period_month}`);
+    console.log(`Generating statement for unit ${unit_id}, period ${period_month}, skip_email: ${skip_email_notification}`);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
@@ -390,44 +390,48 @@ serve(async (req) => {
 
     console.log("Statement generated successfully:", statement.id);
 
-    // Send notification emails
+    // Send notification emails (unless skip_email_notification is true)
     const property = unit.properties as any;
     
-    if (isNewStatement) {
-      // Send new statement notification
-      await sendNotificationEmail(
-        supabaseUrl,
-        supabaseAnonKey,
-        "statement_generated",
-        unit.tenant_id,
-        property?.landlord_id,
-        {
-          unit_number: unit.unit_number,
-          property_name: property?.name,
-          period_month,
-          total_due: totalDue * 100, // Convert to cents for email template
-          base_rent: baseRent * 100, // Add base rent
-          late_fee: lateFee * 100, // Add late fee
-          past_due_balance: pastDueBalance * 100, // Add past due balance
-        }
-      );
-    } else if (lateFeeIncreased && lateFee > 0) {
-      // Send late fee notification
-      await sendNotificationEmail(
-        supabaseUrl,
-        supabaseAnonKey,
-        "late_fee_applied",
-        unit.tenant_id,
-        property?.landlord_id,
-        {
-          unit_number: unit.unit_number,
-          property_name: property?.name,
-          period_month,
-          late_fee: lateFee * 100, // Convert to cents
-          daily_late_fee: Number(unit.daily_late_fee || 0) * 100,
-          total_due: totalDue * 100,
-        }
-      );
+    if (!skip_email_notification) {
+      if (isNewStatement) {
+        // Send new statement notification
+        await sendNotificationEmail(
+          supabaseUrl,
+          supabaseAnonKey,
+          "statement_generated",
+          unit.tenant_id,
+          property?.landlord_id,
+          {
+            unit_number: unit.unit_number,
+            property_name: property?.name,
+            period_month,
+            total_due: totalDue * 100, // Convert to cents for email template
+            base_rent: baseRent * 100, // Add base rent
+            late_fee: lateFee * 100, // Add late fee
+            past_due_balance: pastDueBalance * 100, // Add past due balance
+          }
+        );
+      } else if (lateFeeIncreased && lateFee > 0) {
+        // Send late fee notification
+        await sendNotificationEmail(
+          supabaseUrl,
+          supabaseAnonKey,
+          "late_fee_applied",
+          unit.tenant_id,
+          property?.landlord_id,
+          {
+            unit_number: unit.unit_number,
+            property_name: property?.name,
+            period_month,
+            late_fee: lateFee * 100, // Convert to cents
+            daily_late_fee: Number(unit.daily_late_fee || 0) * 100,
+            total_due: totalDue * 100,
+          }
+        );
+      }
+    } else {
+      console.log("Skipping email notification (skip_email_notification=true)");
     }
 
     return new Response(

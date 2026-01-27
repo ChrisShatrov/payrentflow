@@ -530,6 +530,13 @@ export default function TenantStatements() {
         allowSplitPayment={unit?.allow_split_payment || false}
         splitPaymentFee={unit?.split_payment_fee || null}
         monthly_rent={unit?.monthly_rent || null}
+        unit={unit ? {
+          due_day: unit.due_day,
+          late_fee_type: unit.late_fee_type,
+          late_fee_amount: unit.late_fee_amount,
+          daily_late_fee: unit.daily_late_fee,
+          move_in_date: unit.move_in_date
+        } : null}
       />
     </TenantLayout>
   );

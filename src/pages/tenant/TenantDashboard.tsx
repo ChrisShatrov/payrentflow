@@ -421,10 +421,14 @@ export default function TenantDashboard() {
             
             if (currentMonthCheck && Number(currentMonthCheck.late_fee || 0) > 0) {
               console.log("[TenantDashboard] Detected stale late fee on move-in date, regenerating statement");
-              // Regenerate statement to clear stale late fee
+              // Regenerate statement to clear stale late fee (skip email to avoid duplicate notifications)
               try {
                 await supabase.functions.invoke("generate-statement", {
-                  body: { unit_id: unitData.id, period_month: currentMonthForRegen }
+                  body: { 
+                    unit_id: unitData.id, 
+                    period_month: currentMonthForRegen,
+                    skip_email_notification: true // Skip email since this is just a correction, not a new statement
+                  }
                 });
                 console.log("[TenantDashboard] Statement regenerated to clear stale late fee");
               } catch (error) {
@@ -568,10 +572,13 @@ export default function TenantDashboard() {
                 
                 if (anyUnpaid && anyUnpaid.length > 0) {
                   setCurrentStatement(anyUnpaid[0]);
-                  // Set initial balance from total_due (will be recalculated later with payments)
-                  const initialBalance = Number(anyUnpaid[0].total_due) || 0;
-                  setRemainingBalance(initialBalance);
-                  console.log("[TenantDashboard] Found unpaid statement, set initial balance:", initialBalance);
+                  // Calculate correct rent due (excluding stale late fees)
+                  const baseAmount = Number(anyUnpaid[0].base_rent) + (Number(anyUnpaid[0].additional_fees) || 0);
+                  const storedLateFee = Number(anyUnpaid[0].late_fee || 0);
+                  // For initial balance, use base amount (late fees will be recalculated correctly in UI)
+                  const calculatedInitialBalance = baseAmount;
+                  setRemainingBalance(calculatedInitialBalance);
+                  console.log("[TenantDashboard] Found unpaid statement, set initial balance:", calculatedInitialBalance, "(stored total_due:", Number(anyUnpaid[0].total_due) || 0, "includes stale late fee:", storedLateFee, ")");
                 } else {
                   setCurrentStatement(null);
                   setRemainingBalance(0);
@@ -705,11 +712,15 @@ export default function TenantDashboard() {
               }
             } else {
               // Statement is not paid, set as current
-              // Set initial balance from total_due (will be recalculated later with payments)
+              // Calculate correct rent due (excluding stale late fees)
+              const baseAmount = Number(currentMonthStatement.base_rent) + (Number(currentMonthStatement.additional_fees) || 0);
+              const storedLateFee = Number(currentMonthStatement.late_fee || 0);
+              // For initial balance, use base amount (late fees will be recalculated correctly in UI)
+              // This matches what the UI will display
+              const calculatedInitialBalance = baseAmount;
               setCurrentStatement(currentMonthStatement);
-              const initialBalance = Number(currentMonthStatement.total_due) || 0;
-              setRemainingBalance(initialBalance);
-              console.log("[TenantDashboard] Statement not paid, set initial balance:", initialBalance);
+              setRemainingBalance(calculatedInitialBalance);
+              console.log("[TenantDashboard] Statement not paid, set initial balance:", calculatedInitialBalance, "(stored total_due:", Number(currentMonthStatement.total_due) || 0, "includes stale late fee:", storedLateFee, ")");
             }
           } else {
             // If no statement for current month, try to generate one
@@ -936,10 +947,13 @@ export default function TenantDashboard() {
             if (anyUnpaidStatements && anyUnpaidStatements.length > 0) {
               console.log("[Total Rent Due] Found unpaid statement that wasn't set as current:", anyUnpaidStatements[0].period_month);
               setCurrentStatement(anyUnpaidStatements[0]);
-              // Set initial balance from total_due (will be recalculated below with payments)
-              const initialBalance = Number(anyUnpaidStatements[0].total_due) || 0;
-              setRemainingBalance(initialBalance);
-              console.log("[Total Rent Due] Set initial balance from found statement:", initialBalance);
+              // Calculate correct rent due (excluding stale late fees)
+              const baseAmount = Number(anyUnpaidStatements[0].base_rent) + (Number(anyUnpaidStatements[0].additional_fees) || 0);
+              const storedLateFee = Number(anyUnpaidStatements[0].late_fee || 0);
+              // For initial balance, use base amount (late fees will be recalculated correctly in UI)
+              const calculatedInitialBalance = baseAmount;
+              setRemainingBalance(calculatedInitialBalance);
+              console.log("[Total Rent Due] Set initial balance from found statement:", calculatedInitialBalance, "(stored total_due:", Number(anyUnpaidStatements[0].total_due) || 0, "includes stale late fee:", storedLateFee, ")");
               // Continue to calculate balance below with payments
             } else {
               console.log("[Total Rent Due] No unpaid statements found, balance is 0");
@@ -963,10 +977,14 @@ export default function TenantDashboard() {
                 .order("created_at", { ascending: true }); // Oldest first
 
               if (statementPayments && statementPayments.length > 0) {
-                const statementTotalDue = Number(currentStatement.total_due);
+                // Calculate correct base amount (excluding stale late fees)
+                const baseAmount = Number(currentStatement.base_rent) + (Number(currentStatement.additional_fees) || 0);
+                const storedLateFee = Number(currentStatement.late_fee || 0);
+                const storedTotalDue = Number(currentStatement.total_due);
                 
                 // Sum all statement_amount values (amount applied to statement, excluding platform fees)
-                // Formula: remaining = total_due - sum(statement_amount for all payments)
+                // Formula: remaining = base_amount - sum(statement_amount for all payments)
+                // Late fees will be recalculated correctly in the UI
                 const totalPaidToStatement = statementPayments.reduce((sum, p) => {
                   if (p.statement_amount !== null && p.statement_amount !== undefined) {
                     const amount = Number(p.statement_amount);
@@ -985,20 +1003,26 @@ export default function TenantDashboard() {
                   }
                 }, 0);
 
-                const remaining = Math.max(0, statementTotalDue - totalPaidToStatement);
+                // Calculate remaining based on base amount (late fees recalculated in UI)
+                const remaining = Math.max(0, baseAmount - totalPaidToStatement);
                 console.log("[Total Rent Due] Calculation:", {
                   statement_id: currentStatement.id,
-                  statement_total_due: statementTotalDue,
+                  base_amount: baseAmount,
+                  stored_total_due: storedTotalDue,
+                  stored_late_fee: storedLateFee,
                   total_paid_to_statement: totalPaidToStatement,
-                  remaining_balance: remaining
+                  remaining_balance: remaining,
+                  note: "Late fees will be recalculated correctly in UI display"
                 });
                 setRemainingBalance(remaining);
               } else {
-                // No payments made yet, remaining balance = total_due
-                console.log("[Total Rent Due] No payments yet, using total_due:", currentStatement.total_due);
-                const balance = Number(currentStatement.total_due) || 0;
-                console.log("[Total Rent Due] Setting remaining balance to:", balance, "from statement total_due:", currentStatement.total_due);
-                setRemainingBalance(balance);
+                // No payments yet - use base amount (late fees recalculated in UI)
+                const baseAmount = Number(currentStatement.base_rent) + (Number(currentStatement.additional_fees) || 0);
+                const storedLateFee = Number(currentStatement.late_fee || 0);
+                const storedTotalDue = Number(currentStatement.total_due) || 0;
+                console.log("[Total Rent Due] No payments yet, using base amount:", baseAmount, "(stored total_due:", storedTotalDue, "includes stale late fee:", storedLateFee, ")");
+                setRemainingBalance(baseAmount);
+                console.log("[Total Rent Due] Setting remaining balance to:", baseAmount, "from base amount (late fees will be recalculated in UI)");
               }
             }
           } else if (!currentStatement) {
@@ -2062,6 +2086,13 @@ export default function TenantDashboard() {
         allowSplitPayment={unit?.allow_split_payment || false}
         splitPaymentFee={unit?.split_payment_fee || null}
         monthly_rent={unit?.monthly_rent || null}
+        unit={unit ? {
+          due_day: unit.due_day,
+          late_fee_type: unit.late_fee_type || '',
+          late_fee_amount: unit.late_fee_amount || 0,
+          daily_late_fee: unit.daily_late_fee,
+          move_in_date: unit.move_in_date
+        } : null}
       />
 
       {/* Documents Modal */}

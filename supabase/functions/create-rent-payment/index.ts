@@ -317,13 +317,15 @@ serve(async (req) => {
       logStep("Stripe ACH processing fee", { stripeFeeEstimate: 0 });
     }
 
-    // Total amount tenant pays = baseAmount (rent + late fees) + all platform fees + Stripe fees
+    // Total amount tenant pays = baseAmount (rent + late fees) + all platform fees
+    // Note: Stripe fees are absorbed by the platform (not shown to tenant)
     // This is the sum of all line items in the checkout session
-    const totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate;
+    const totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
     
     // Application fee = ALL platform fees + Stripe fees that must be included in application_fee_amount
     // CRITICAL: This MUST include Stripe fees so the platform absorbs them, not the landlord
     // If Stripe fees are missing from application_fee_amount, Stripe will deduct them from the landlord's transfer
+    // Note: Stripe fees are included in application_fee_amount but NOT in totalAmount (platform absorbs them)
     const applicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate;
     
     // Validation: Ensure application_fee_amount includes ALL platform fees AND Stripe fees
@@ -460,19 +462,8 @@ serve(async (req) => {
       });
     }
 
-    // Add Stripe processing fee as line item (transparent to tenant)
-    if (stripeFeeEstimate > 0) {
-      sessionConfig.line_items!.push({
-        price_data: {
-          currency: "usd",
-          product_data: {
-            name: payment_method === "card" ? "Card Processing Fee (Stripe)" : "Processing Fee",
-          },
-          unit_amount: stripeFeeEstimate,
-        },
-        quantity: 1,
-      });
-    }
+    // Stripe processing fee is absorbed by the platform (not shown as separate line item to tenant)
+    // The fee is still included in application_fee_amount to ensure Stripe fees are covered
 
     // Configure payment methods based on selection
     if (payment_method === "ach") {
