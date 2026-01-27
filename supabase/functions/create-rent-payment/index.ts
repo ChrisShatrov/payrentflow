@@ -291,13 +291,11 @@ serve(async (req) => {
       paymentMethodFee = ACH_FEE_FLAT;
     }
 
-    // Add split payment fee if enabled and NOT paying in full (use unit's fee or default to $30)
-    if (unit.allow_split_payment && !isFullPayment) {
+    // Add split payment fee if enabled (charged every month when split payment is allowed)
+    if (unit.allow_split_payment) {
       const unitSplitFee = unit.split_payment_fee ? Math.round(Number(unit.split_payment_fee) * 100) : SPLIT_PAYMENT_FEE;
       splitFee = unitSplitFee;
       logStep("Split payment fee applied", { splitFee: splitFee / 100 });
-    } else if (unit.allow_split_payment && isFullPayment) {
-      logStep("Split payment fee waived - paying in full");
     }
 
     // Calculate Stripe processing fee estimate

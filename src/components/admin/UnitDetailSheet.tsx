@@ -480,8 +480,8 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
           if (!newOpen) setIsEditing(false);
           onOpenChange(newOpen);
         }}>
-          <SheetContent className="sm:max-w-md">
-            <SheetHeader>
+          <SheetContent className="w-full sm:w-[90vw] sm:max-w-2xl overflow-y-auto flex flex-col">
+            <SheetHeader className="flex-shrink-0">
               <SheetTitle className="flex items-center justify-between">
                 <span>Edit Unit {unit.unit_number}</span>
                 <Badge variant={unit.tenant_id ? "default" : "secondary"}>
@@ -491,7 +491,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
               <SheetDescription>Update unit rental settings</SheetDescription>
             </SheetHeader>
 
-            <div className="mt-6 space-y-5">
+            <div className="mt-6 space-y-5 pb-6 flex-1 overflow-y-auto">
             {/* Assign Tenant */}
             <div className="space-y-2">
               <Label>Assign Tenant (optional)</Label>
@@ -733,8 +733,8 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
               )}
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-3 pt-4">
+            {/* Actions - Fixed at bottom */}
+            <div className="flex gap-3 pt-4 mt-auto border-t flex-shrink-0">
               <Button variant="outline" className="flex-1" onClick={handleCancel} disabled={saving}>
                 <X className="h-4 w-4 mr-2" />
                 Cancel
@@ -797,8 +797,8 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="sm:max-w-md">
-          <SheetHeader>
+        <SheetContent className="w-full sm:w-[90vw] sm:max-w-2xl overflow-y-auto flex flex-col">
+          <SheetHeader className="flex-shrink-0">
             <SheetTitle className="flex items-center justify-between">
               <span>Unit {unit.unit_number}</span>
               <Badge variant={unit.tenant_id ? "default" : "secondary"}>
@@ -808,7 +808,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
             <SheetDescription>Unit details and rental information</SheetDescription>
           </SheetHeader>
 
-          <div className="mt-6 space-y-6">
+          <div className="mt-6 space-y-6 pb-6 overflow-y-auto flex-1">
           {/* Monthly Rent */}
           <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">
             <div className="bg-primary/10 p-2 rounded-lg">

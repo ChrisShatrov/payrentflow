@@ -288,8 +288,15 @@ serve(async (req) => {
       console.log(`Unit ${unit_id} - Including past due balance: $${pastDueBalance} from ${pastDueStatements?.length || 0} statements`);
     }
 
-    // Include past due balance in total (store in additional_fees if not already set)
-    const totalAdditionalFees = additionalFees + pastDueBalance;
+    // Add split payment fee if enabled (charged every month when split payment is allowed)
+    let splitPaymentFee = 0;
+    if (unit.allow_split_payment) {
+      splitPaymentFee = unit.split_payment_fee ? Number(unit.split_payment_fee) : 30.00;
+      console.log(`Split payment fee added to statement: $${splitPaymentFee}`);
+    }
+
+    // Include past due balance and split payment fee in total (store in additional_fees if not already set)
+    const totalAdditionalFees = additionalFees + pastDueBalance + splitPaymentFee;
     const totalDue = baseRent + totalAdditionalFees + lateFee
 
     let statement

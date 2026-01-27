@@ -198,8 +198,8 @@ export function PaymentModal({
       const isFullPayment = roundedCurrentAmount >= (roundedFullAmount - 0.01) && 
                            roundedBaseAmount >= (roundedFullTotal - 0.01);
       
-      // Only include split payment fee if NOT paying in full
-      const splitFee = isFullPayment ? 0 : (splitPaymentFee || unit?.split_payment_fee || DEFAULT_SPLIT_PAYMENT_FEE);
+      // Always include split payment fee when split payment is enabled (charged every month)
+      const splitFee = allowSplitPayment ? (splitPaymentFee || unit?.split_payment_fee || DEFAULT_SPLIT_PAYMENT_FEE) : 0;
       
       let paymentMethodFee = 0;
       if (paymentMethod === "card") {
@@ -405,11 +405,6 @@ export function PaymentModal({
                 <p className="text-xs text-muted-foreground">
                   Minimum: ${(Number(statement.base_rent) / 2).toFixed(2)} (half of current month's rent)
                 </p>
-                {fees.isFullPayment && (
-                  <p className="text-xs text-green-600 dark:text-green-400 font-medium">
-                    ✓ Paying in full - Split Payment Fee waived
-                  </p>
-                )}
               </div>
             </div>
           )}
