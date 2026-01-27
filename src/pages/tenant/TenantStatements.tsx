@@ -330,19 +330,17 @@ export default function TenantStatements() {
                         </div>
                       )}
                       {(() => {
-                        // Use the calculated late fee (which accounts for move-in month) instead of stored value
-                        // The stored value might be incorrect if statement was generated before the fix
+                        // Always use calculated late fee (which accounts for move-in month and current date)
+                        // Never use stored value - it may be stale (e.g., from before move-in date fix)
+                        // Only display late fee if it's actually calculated/applied (> 0)
                         const calculatedLateFee = calculateCurrentLateFee(currentStatement);
-                        const storedLateFee = Number(currentStatement.late_fee) || 0;
-                        // Use calculated fee if it's different (statement needs regeneration) or if stored is 0
-                        const displayLateFee = calculatedLateFee > 0 ? calculatedLateFee : storedLateFee;
                         
-                        if (displayLateFee > 0) {
+                        if (calculatedLateFee > 0) {
                           return (
                             <div>
                               <p className="text-xs text-muted-foreground uppercase tracking-wide">Late Fee</p>
                               <p className="text-lg font-semibold text-destructive">
-                                ${displayLateFee.toLocaleString()}
+                                ${calculatedLateFee.toLocaleString()}
                               </p>
                             </div>
                           );
@@ -353,12 +351,10 @@ export default function TenantStatements() {
                         <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Due</p>
                         <p className="text-2xl font-bold text-foreground">
                           {(() => {
+                            // Always use calculated late fee for total (never stored value)
                             const calculatedLateFee = calculateCurrentLateFee(currentStatement);
-                            const storedLateFee = Number(currentStatement.late_fee) || 0;
-                            // Recalculate total if late fee changed
                             const baseTotal = Number(currentStatement.base_rent) + (Number(currentStatement.additional_fees) || 0);
-                            const correctLateFee = calculatedLateFee > 0 ? calculatedLateFee : storedLateFee;
-                            const correctTotal = baseTotal + correctLateFee;
+                            const correctTotal = baseTotal + calculatedLateFee;
                             return `$${correctTotal.toLocaleString()}`;
                           })()}
                         </p>

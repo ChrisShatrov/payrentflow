@@ -45,11 +45,15 @@ if (!SUPABASE_URL) {
       '❌ INVALID SUPABASE URL DETECTED!\n' +
       `Current URL: ${SUPABASE_URL}\n` +
       'The URL is missing ".co" - it should end with ".supabase.co" not ".supabase.c"\n\n' +
-      '⚠️ IMPORTANT: Vite environment variables are embedded at BUILD TIME!\n' +
-      'If you just updated VITE_SUPABASE_URL in your hosting platform:\n' +
-      '1. Verify the value ends with ".supabase.co" (not ".supabase.c")\n' +
-      '2. You MUST trigger a new BUILD/DEPLOYMENT for the change to take effect\n' +
-      '3. Just saving the env var is NOT enough - the site needs to be rebuilt\n\n' +
+      '⚠️ CRITICAL: This value was embedded in the BUILD at build time!\n' +
+      'Even if you deleted/updated the env var in Vercel, the OLD BUILD still has this value!\n\n' +
+      '🔧 TO FIX:\n' +
+      '1. Go to Vercel Dashboard → Your Project → Settings → Environment Variables\n' +
+      '2. Add/Update VITE_SUPABASE_URL with the CORRECT value: https://<project-id>.supabase.co\n' +
+      '3. Go to Deployments tab → Click "Redeploy" on the latest deployment\n' +
+      '4. Wait for the NEW build to complete (this will use the new/correct env var)\n' +
+      '5. Hard refresh your browser: Cmd+Shift+R (Mac) or Ctrl+Shift+R (Windows)\n\n' +
+      '💡 The old build is still being served - you MUST trigger a NEW deployment!\n' +
       'Expected format: https://heismaqehgqxcrndtqmz.supabase.co'
     );
   } else if (SUPABASE_URL.endsWith('.supabase.co')) {

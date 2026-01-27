@@ -398,6 +398,41 @@ export default function TenantDashboard() {
         // Set maintenance enabled status based on property setting
         const maintenanceAllowed = (unitData.property as any)?.allow_maintenance_requests ?? true;
         setMaintenanceEnabled(maintenanceAllowed);
+        
+        // Check if current month statement has a stale late fee on move-in date and regenerate if needed
+        const currentMonthForRegen = format(new Date(), "MM/yyyy");
+        if (unitData.move_in_date) {
+          const moveInDate = new Date(unitData.move_in_date);
+          const moveInMonth = format(moveInDate, "MM/yyyy");
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const moveInDateStart = new Date(moveInDate);
+          moveInDateStart.setHours(0, 0, 0, 0);
+          
+          // If we're in the move-in month and today is the move-in date, check for stale late fees
+          if (currentMonthForRegen === moveInMonth && today.getTime() === moveInDateStart.getTime()) {
+            // Check if current month statement exists and has a late fee
+            const { data: currentMonthCheck } = await supabase
+              .from("statements")
+              .select("id, late_fee, period_month")
+              .eq("unit_id", unitData.id)
+              .eq("period_month", currentMonthForRegen)
+              .maybeSingle();
+            
+            if (currentMonthCheck && Number(currentMonthCheck.late_fee || 0) > 0) {
+              console.log("[TenantDashboard] Detected stale late fee on move-in date, regenerating statement");
+              // Regenerate statement to clear stale late fee
+              try {
+                await supabase.functions.invoke("generate-statement", {
+                  body: { unit_id: unitData.id, period_month: currentMonthForRegen }
+                });
+                console.log("[TenantDashboard] Statement regenerated to clear stale late fee");
+              } catch (error) {
+                console.error("[TenantDashboard] Error regenerating statement:", error);
+              }
+            }
+          }
+        }
 
         // Skip current month's statement if first_month_paid is true
         const currentMonth = format(new Date(), "MM/yyyy");
@@ -506,9 +541,13 @@ export default function TenantDashboard() {
                       setRemainingBalance(0);
                     } else {
                       // Statement exists but is unpaid - set it as current statement
-                      // remainingBalance will be calculated later
+                      // Calculate remaining balance immediately
                       console.log("[TenantDashboard] Current month statement exists but is unpaid:", currentMonthStatement.status);
                       setCurrentStatement(currentMonthStatement);
+                      // Set initial balance from total_due (will be recalculated later with payments)
+                      const initialBalance = Number(currentMonthStatement.total_due) || 0;
+                      setRemainingBalance(initialBalance);
+                      console.log("[TenantDashboard] Set initial remaining balance:", initialBalance);
                     }
                   } else {
                     // Statement check returned null somehow
@@ -529,6 +568,10 @@ export default function TenantDashboard() {
                 
                 if (anyUnpaid && anyUnpaid.length > 0) {
                   setCurrentStatement(anyUnpaid[0]);
+                  // Set initial balance from total_due (will be recalculated later with payments)
+                  const initialBalance = Number(anyUnpaid[0].total_due) || 0;
+                  setRemainingBalance(initialBalance);
+                  console.log("[TenantDashboard] Found unpaid statement, set initial balance:", initialBalance);
                 } else {
                   setCurrentStatement(null);
                   setRemainingBalance(0);
@@ -644,10 +687,13 @@ export default function TenantDashboard() {
                       // remainingBalance is already set to 0 above
                     } else {
                       // Statement exists but is unpaid - set it as current statement
-                      // remainingBalance will be calculated later
+                      // Calculate remaining balance immediately
                       console.log("[TenantDashboard] Current month statement exists but is unpaid:", currentMonthStatement.status);
                       setCurrentStatement(currentMonthStatement);
-                      // Don't set remainingBalance to 0 here - it will be calculated later
+                      // Set initial balance from total_due (will be recalculated later with payments)
+                      const initialBalance = Number(currentMonthStatement.total_due) || 0;
+                      setRemainingBalance(initialBalance);
+                      console.log("[TenantDashboard] Set initial remaining balance:", initialBalance);
                     }
                   } else {
                     // Statement check returned null somehow
@@ -659,8 +705,11 @@ export default function TenantDashboard() {
               }
             } else {
               // Statement is not paid, set as current
-              // remainingBalance will be calculated later in the function
+              // Set initial balance from total_due (will be recalculated later with payments)
               setCurrentStatement(currentMonthStatement);
+              const initialBalance = Number(currentMonthStatement.total_due) || 0;
+              setRemainingBalance(initialBalance);
+              console.log("[TenantDashboard] Statement not paid, set initial balance:", initialBalance);
             }
           } else {
             // If no statement for current month, try to generate one
@@ -887,7 +936,11 @@ export default function TenantDashboard() {
             if (anyUnpaidStatements && anyUnpaidStatements.length > 0) {
               console.log("[Total Rent Due] Found unpaid statement that wasn't set as current:", anyUnpaidStatements[0].period_month);
               setCurrentStatement(anyUnpaidStatements[0]);
-              // Continue to calculate balance below
+              // Set initial balance from total_due (will be recalculated below with payments)
+              const initialBalance = Number(anyUnpaidStatements[0].total_due) || 0;
+              setRemainingBalance(initialBalance);
+              console.log("[Total Rent Due] Set initial balance from found statement:", initialBalance);
+              // Continue to calculate balance below with payments
             } else {
               console.log("[Total Rent Due] No unpaid statements found, balance is 0");
               setRemainingBalance(0);
@@ -944,6 +997,7 @@ export default function TenantDashboard() {
                 // No payments made yet, remaining balance = total_due
                 console.log("[Total Rent Due] No payments yet, using total_due:", currentStatement.total_due);
                 const balance = Number(currentStatement.total_due) || 0;
+                console.log("[Total Rent Due] Setting remaining balance to:", balance, "from statement total_due:", currentStatement.total_due);
                 setRemainingBalance(balance);
               }
             }
@@ -1339,30 +1393,6 @@ export default function TenantDashboard() {
   const nextDueDate = getNextDueDate();
   const pastDue = isPastDue();
   
-  // Calculate rent due amount
-  // Use remaining balance if available, otherwise use statement total_due, or calculate pro-rated if no statement
-  let rentDue = 0;
-  if (!currentStatement) {
-    // No current statement means all statements are paid or none exist yet
-    rentDue = 0;
-  } else if (currentStatement.status === "paid") {
-    rentDue = 0; // Paid statement has no balance
-  } else if (remainingBalance !== null) {
-    rentDue = remainingBalance;
-  } else if (currentStatement.total_due) {
-    rentDue = currentStatement.total_due;
-  } else if (unit) {
-    // No statement exists - calculate pro-rated amount if move-in date exists
-    const currentMonth = format(new Date(), "MM/yyyy");
-    if (unit.move_in_date) {
-      const moveInDate = new Date(unit.move_in_date);
-      const proratedAmount = calculateProratedRent(moveInDate, currentMonth, unit.monthly_rent);
-      rentDue = proratedAmount;
-    } else {
-      rentDue = unit.monthly_rent;
-    }
-  }
-  
   const canPay = canMakePayment();
   
   // Calculate days until payment is available (for button text)
@@ -1400,85 +1430,14 @@ export default function TenantDashboard() {
   const daysUntilPaymentAvailable = getDaysUntilPaymentAvailable();
 
   // Calculate late fee breakdown
-  // First, try to use the statement's stored late_fee, but also calculate breakdown for display
+  // Always calculate based on current date and move-in date logic, not stored values
+  // This ensures late fees are never shown when they shouldn't apply (e.g., on move-in date)
   const calculateLateFeeBreakdown = () => {
     if (!currentStatement || !unit || currentStatement.status === "paid") {
       return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
     
-    // Use the statement's stored late_fee as the source of truth
-    const statementLateFee = Number(currentStatement.late_fee || 0);
-    
-    // If statement has late fees stored, use them and calculate breakdown
-    if (statementLateFee > 0) {
-      // Calculate breakdown to show flat vs daily
-      if (!currentStatement.period_month) {
-        // If we can't calculate breakdown, just show total
-        return { flatFee: statementLateFee, dailyFee: 0, totalLateFee: statementLateFee };
-      }
-      
-      const today = new Date();
-      const [month, year] = currentStatement.period_month.split('/');
-      
-      // Check if this is the move-in month
-      const isMoveInMonth = unit.move_in_date && 
-        parseInt(year) === new Date(unit.move_in_date).getFullYear() &&
-        parseInt(month) === new Date(unit.move_in_date).getMonth() + 1;
-      
-      // Calculate due date: move-in month uses move-in date + 1 day, otherwise standard due day
-      let dueDate: Date;
-      if (isMoveInMonth && unit.move_in_date) {
-        // For move-in month: rent is due 24 hours after move-in date (move-in date + 1 day)
-        const moveInDate = startOfDay(new Date(unit.move_in_date));
-        const moveInDueDate = new Date(moveInDate);
-        moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
-        dueDate = moveInDueDate;
-      } else {
-        // Standard due date
-        dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
-      }
-      
-      // Normalize dates to start of day for accurate calculation
-      const todayStart = startOfDay(today);
-      const dueDateStart = startOfDay(dueDate);
-      
-      if (todayStart <= dueDateStart) {
-        // Not overdue yet, but statement has late fees (might be from previous calculation)
-        return { flatFee: statementLateFee, dailyFee: 0, totalLateFee: statementLateFee };
-      }
-      
-      const daysLate = differenceInDays(todayStart, dueDateStart);
-      
-      // Calculate flat late fee (one-time fee) from unit settings
-      let flatFee = 0;
-      if (unit.late_fee_type === 'flat' && unit.late_fee_amount) {
-        flatFee = Number(unit.late_fee_amount);
-      } else if (unit.late_fee_type === 'percent' && unit.late_fee_amount) {
-        flatFee = (Number(currentStatement.base_rent) * Number(unit.late_fee_amount)) / 100;
-      }
-      
-      // Daily late fee applies starting from day 2 (daysLate - 1)
-      // Daily fee only applies for days after the first day
-      const daysForDailyFee = Math.max(0, daysLate - 1);
-      const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
-      const calculatedDailyFee = daysForDailyFee * dailyLateFeeRate;
-      
-      // Use calculated breakdown, but ensure total matches statement's late_fee
-      const calculatedTotal = flatFee + calculatedDailyFee;
-      
-      // If calculated total matches statement's late_fee, use calculated breakdown
-      // Otherwise, use statement's total and estimate breakdown
-      if (Math.abs(calculatedTotal - statementLateFee) < 0.01) {
-        return { flatFee, dailyFee: calculatedDailyFee, totalLateFee: statementLateFee };
-      } else {
-        // Statement has late fees but breakdown doesn't match - use statement total
-        // Estimate: if we have a flat fee, subtract it from total for daily fee
-        const estimatedDailyFee = Math.max(0, statementLateFee - flatFee);
-        return { flatFee, dailyFee: estimatedDailyFee, totalLateFee: statementLateFee };
-      }
-    }
-    
-    // No late fees in statement, but check if we should calculate them (statement might need regeneration)
+    // Cannot calculate without period_month
     if (!currentStatement.period_month) {
       return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
@@ -1508,6 +1467,17 @@ export default function TenantDashboard() {
     const todayStart = startOfDay(today);
     const dueDateStart = startOfDay(dueDate);
     
+    // If today is the move-in date, no late fees should apply
+    if (isMoveInMonth && unit.move_in_date) {
+      const moveInDateStart = startOfDay(new Date(unit.move_in_date));
+      
+      // If today is the move-in date, no late fees
+      if (todayStart.getTime() === moveInDateStart.getTime()) {
+        return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
+      }
+    }
+    
+    // If not past due date, no late fees
     if (todayStart <= dueDateStart) {
       return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
@@ -1528,10 +1498,14 @@ export default function TenantDashboard() {
     const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
     const dailyFee = daysForDailyFee * dailyLateFeeRate;
     
+    const calculatedTotal = flatFee + dailyFee;
+    
     // Debug logging
+    const statementLateFee = Number(currentStatement.late_fee || 0);
     console.log("[TenantDashboard] Late fee calculation:", {
       periodMonth: currentStatement.period_month,
-      statementLateFee,
+      storedLateFee: statementLateFee,
+      calculatedLateFee: calculatedTotal,
       dueDay: unit.due_day,
       dueDate: dueDateStart.toISOString(),
       today: todayStart.toISOString(),
@@ -1540,16 +1514,51 @@ export default function TenantDashboard() {
       dailyLateFeeRate,
       calculatedDailyFee: dailyFee,
       flatFee,
-      calculatedTotal: flatFee + dailyFee,
+      calculatedTotal,
       unitDailyLateFee: unit.daily_late_fee,
       lateFeeType: unit.late_fee_type,
       lateFeeAmount: unit.late_fee_amount
     });
     
-    return { flatFee, dailyFee, totalLateFee: flatFee + dailyFee };
+    return { flatFee, dailyFee, totalLateFee: calculatedTotal };
   };
 
+  // Calculate late fee breakdown (needed for rentDue calculation)
   const { flatFee, dailyFee, totalLateFee } = calculateLateFeeBreakdown();
+  
+  // Calculate rent due amount
+  // Recalculate total using calculated late fees (not stored values) to ensure accuracy
+  let rentDue = 0;
+  if (!currentStatement) {
+    // No current statement means all statements are paid or none exist yet
+    rentDue = 0;
+  } else if (currentStatement.status === "paid") {
+    rentDue = 0; // Paid statement has no balance
+  } else {
+    // Recalculate total due using calculated late fees (accounts for move-in date)
+    // This ensures we don't use stale late fees from the database
+    const baseAmount = Number(currentStatement.base_rent) + (Number(currentStatement.additional_fees) || 0);
+    const calculatedLateFee = totalLateFee; // From calculateLateFeeBreakdown()
+    const recalculatedTotal = baseAmount + calculatedLateFee;
+    
+    // If we have remainingBalance (after payments), use that but adjust for calculated late fee
+    if (remainingBalance !== null) {
+      // Recalculate: remaining = (base + calculated late fee) - payments
+      // We need to adjust remainingBalance to account for the difference between stored and calculated late fees
+      const storedLateFee = Number(currentStatement.late_fee || 0);
+      const lateFeeDifference = calculatedLateFee - storedLateFee;
+      rentDue = Math.max(0, remainingBalance + lateFeeDifference);
+    } else {
+      // No payments yet, use recalculated total
+      rentDue = recalculatedTotal;
+    }
+    
+    // Fallback: if calculation fails, use statement total_due
+    if (rentDue === 0 && currentStatement.total_due > 0 && calculatedLateFee === 0) {
+      // If calculated late fee is 0 but statement has total_due, recalculate without late fee
+      rentDue = baseAmount;
+    }
+  }
 
   if (loading) {
     return (
@@ -1759,20 +1768,25 @@ export default function TenantDashboard() {
                 );
               }
               
-              // Flat Late Fee
-              if (flatFee > 0 || (currentStatement.late_fee && Number(currentStatement.late_fee) > 0)) {
+              // Only show late fees if they're actually calculated/applied (totalLateFee > 0)
+              // Use calculated late fees from calculateLateFeeBreakdown() instead of stored values
+              // This ensures late fees are never shown when they shouldn't apply (e.g., on move-in date)
+              const isLateFeeApplied = totalLateFee > 0;
+              
+              // Flat Late Fee - only show if actually applied
+              if (isLateFeeApplied && flatFee > 0) {
                 feeItems.push(
                   <div key="flat-late-fee">
                     <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Flat Late Fee</p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                      ${flatFee > 0 ? flatFee.toLocaleString("en-US", { minimumFractionDigits: 2 }) : (Number(currentStatement.late_fee) - dailyFee).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      ${flatFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                 );
               }
               
-              // Daily Late Fee
-              if (dailyFee > 0 || (currentStatement.late_fee && Number(currentStatement.late_fee) > 0 && dailyFee === 0 && flatFee < Number(currentStatement.late_fee))) {
+              // Daily Late Fee - only show if actually applied
+              if (isLateFeeApplied && dailyFee > 0) {
                 feeItems.push(
                   <div key="daily-late-fee">
                     <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>
@@ -1784,19 +1798,20 @@ export default function TenantDashboard() {
                       )}
                     </p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                      ${dailyFee > 0 ? dailyFee.toLocaleString("en-US", { minimumFractionDigits: 2 }) : (Number(currentStatement.late_fee) - flatFee).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      ${dailyFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                 );
               }
               
-              // Total Late Fee (if breakdown doesn't match)
-              if (currentStatement.late_fee && Number(currentStatement.late_fee) > 0 && Math.abs(totalLateFee - Number(currentStatement.late_fee)) > 0.01 && flatFee === 0 && dailyFee === 0) {
+              // Total Late Fee (if breakdown doesn't match) - only show if actually applied
+              // This case should rarely occur, but handles edge cases where breakdown calculation differs
+              if (isLateFeeApplied && totalLateFee > 0 && flatFee === 0 && dailyFee === 0) {
                 feeItems.push(
                   <div key="total-late-fee">
                     <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Total Late Fee</p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                      ${Number(currentStatement.late_fee).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      ${totalLateFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                 );

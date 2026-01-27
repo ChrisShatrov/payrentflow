@@ -419,6 +419,37 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
           // Don't show error to user - statement might already exist
         }
       }
+      
+      // Regenerate statement if move-in date changed for an existing tenant
+      // Reuse currentMoveInDate that was already calculated above
+      const moveInDateChanged = formData.move_in_date !== currentMoveInDate && formData.move_in_date;
+      if (moveInDateChanged) {
+        // Regenerate current month statement to recalculate late fees
+        const today = new Date();
+        const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+        const currentYear = today.getFullYear();
+        const periodMonth = `${currentMonth}/${currentYear}`;
+        
+        console.log("Move-in date changed, regenerating statement for:", periodMonth);
+        try {
+          const { data: regeneratedStatement, error: regenerateError } = await supabase.functions.invoke("generate-statement", {
+            body: { 
+              unit_id: unit.id, 
+              period_month: periodMonth 
+            }
+          });
+          
+          if (regenerateError) {
+            console.error("Error regenerating statement:", regenerateError);
+            // Don't show error to user - statement might already exist
+          } else if (regeneratedStatement) {
+            console.log("Statement regenerated successfully:", regeneratedStatement);
+          }
+        } catch (error) {
+          console.error("Exception regenerating statement:", error);
+          // Don't show error to user - statement might already exist
+        }
+      }
 
       // Send notification if there are changes and tenant is assigned
       if (changes.length > 0 && unit.tenant_id) {

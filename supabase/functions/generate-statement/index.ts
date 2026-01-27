@@ -271,6 +271,19 @@ serve(async (req) => {
       console.warn(`WARNING: Late fee calculated as ${lateFee} but today (${today.toISOString()}) is not past due date (${dueDate.toISOString()}). Setting to 0.`);
       lateFee = 0;
     }
+    
+    // Extra validation: If today equals move-in date, late fee must be 0
+    // This ensures late fees are never applied on the move-in date itself
+    if (isMoveInMonth && moveInDateObj) {
+      const moveInDateStart = new Date(moveInDateObj);
+      moveInDateStart.setHours(0, 0, 0, 0);
+      
+      if (today.getTime() === moveInDateStart.getTime()) {
+        // Today is the move-in date - no late fees should apply
+        console.log(`Today is move-in date (${moveInDateObj.toISOString()}), ensuring late fee is 0`);
+        lateFee = 0;
+      }
+    }
 
     // Calculate past due balance (unpaid/overdue statements before this period)
     const { data: pastDueStatements } = await supabaseClient
