@@ -94,11 +94,15 @@ serve(async (req) => {
       }
       
       // Check if statement period is before move-in month
+      // Only skip if move-in date is in a LATER month than the statement period
       const [statementMonth, statementYear] = period_month.split('/').map(Number);
       const statementMonthStart = new Date(statementYear, statementMonth - 1, 1);
       statementMonthStart.setHours(0, 0, 0, 0);
+      const statementMonthEnd = new Date(statementYear, statementMonth, 0, 23, 59, 59, 999);
       
-      if (moveInDate > statementMonthStart) {
+      // Skip only if move-in date is AFTER the end of the statement month
+      // If move-in is within the statement month, we should generate the statement
+      if (moveInDate > statementMonthEnd) {
         console.log(`Skipping statement generation for unit ${unit_id} - move-in date ${unit.move_in_date} is after statement period ${period_month}`);
         return new Response(
           JSON.stringify({ 
@@ -178,7 +182,7 @@ serve(async (req) => {
     }
 
     // Calculate late fee if overdue
-    // IMPORTANT: No late fees for move-in month (first month) as per user requirement
+    // IMPORTANT: Late fees apply 24 hours after move-in date (move-in date + 1 day)
     // Reuse 'today' and [month, year] declared earlier
     
     // Check if this is the move-in month
@@ -186,22 +190,41 @@ serve(async (req) => {
       parseInt(year) === moveInDateObj.getFullYear() &&
       parseInt(month) === moveInDateObj.getMonth() + 1;
     
-    // For move-in month, use move-in date as due date; otherwise use standard due day
+    // For move-in month, use move-in date + 1 day as due date (24 hours after move-in)
+    // Otherwise use standard due day
     let dueDate: Date;
     if (isMoveInMonth && moveInDateObj) {
-      // Rent is due on move-in date (or today if already moved in)
-      dueDate = moveInDateObj > today ? moveInDateObj : today;
+      // Rent is due 24 hours after move-in date
+      const moveInDueDate = new Date(moveInDateObj);
+      moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+      moveInDueDate.setHours(0, 0, 0, 0); // Normalize to start of day
+      dueDate = moveInDueDate;
     } else {
-      // Standard due date
+      // Standard due date - normalize to start of day for accurate comparison
       dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day)
+      dueDate.setHours(0, 0, 0, 0); // Normalize to start of day
     }
 
-    // Skip late fees entirely for move-in month (first month)
-    if (isMoveInMonth) {
-      console.log(`Skipping late fees for move-in month ${period_month} - first month has no late fees`);
+    // Add defensive logging to debug late fee calculation
+    console.log(`Late fee calculation check:`, {
+      today: today.toISOString(),
+      dueDate: dueDate.toISOString(),
+      isMoveInMonth,
+      moveInDate: moveInDateObj?.toISOString(),
+      period_month,
+      willCalculateLateFee: today > dueDate,
+      daysDifference: Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+    });
+
+    // Calculate late fees if overdue (applies to both move-in month and standard months)
+    // CRITICAL: Only calculate if today is AFTER the due date (not equal to)
+    // Validation: Never calculate late fees when today <= dueDate
+    if (today <= dueDate) {
+      console.log(`No late fees - payment is not yet due. Today: ${today.toISOString()}, Due date: ${dueDate.toISOString()}`);
       lateFee = 0;
-    } else if (today > dueDate) {
+    } else {
       const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+      console.log(`Calculating late fees - ${daysLate} days late. Due date: ${dueDate.toISOString()}, Today: ${today.toISOString()}`);
       const allowSplitPayment = Boolean(unit.allow_split_payment)
 
       if (allowSplitPayment) {
@@ -242,8 +265,32 @@ serve(async (req) => {
         console.log(`Applied late fee: ${lateFee} (one-time + ${daysForDailyFee} days of daily fee × $${unit.daily_late_fee})`);
       }
     }
+    
+    // Final validation: Ensure late fee is 0 if today <= dueDate
+    if (today <= dueDate && lateFee > 0) {
+      console.warn(`WARNING: Late fee calculated as ${lateFee} but today (${today.toISOString()}) is not past due date (${dueDate.toISOString()}). Setting to 0.`);
+      lateFee = 0;
+    }
 
-    const totalDue = baseRent + additionalFees + lateFee
+    // Calculate past due balance (unpaid/overdue statements before this period)
+    const { data: pastDueStatements } = await supabaseClient
+      .from('statements')
+      .select('*')
+      .eq('unit_id', unit_id)
+      .in('status', ['unpaid', 'overdue'])
+      .lt('period_month', period_month)
+      .order('period_month', { ascending: true });
+
+    const pastDueBalance = pastDueStatements?.reduce((sum, s) => 
+      sum + Number(s.total_due || 0), 0) || 0;
+
+    if (pastDueBalance > 0) {
+      console.log(`Unit ${unit_id} - Including past due balance: $${pastDueBalance} from ${pastDueStatements?.length || 0} statements`);
+    }
+
+    // Include past due balance in total (store in additional_fees if not already set)
+    const totalAdditionalFees = additionalFees + pastDueBalance;
+    const totalDue = baseRent + totalAdditionalFees + lateFee
 
     let statement
     const isNewStatement = !existingStatement;
@@ -257,11 +304,8 @@ serve(async (req) => {
       let updateStatus: string;
       if (isMoveInMonth && unit.first_month_paid) {
         updateStatus = 'paid';
-      } else if (isMoveInMonth) {
-        // Move-in month: due on move-in date
-        updateStatus = today > moveInDateObj! ? 'overdue' : 'unpaid';
       } else {
-        // Standard month: use standard due date
+        // Use the calculated dueDate (which is move-in date + 1 day for move-in month)
         updateStatus = today > dueDate ? 'overdue' : 'unpaid';
       }
       
@@ -269,7 +313,7 @@ serve(async (req) => {
         .from('statements')
         .update({
           base_rent: baseRent,
-          additional_fees: additionalFees,
+          additional_fees: totalAdditionalFees, // Include past due balance
           late_fee: lateFee,
           total_due: totalDue,
           status: updateStatus
@@ -288,22 +332,19 @@ serve(async (req) => {
       console.log("Creating new statement");
       
       // Determine initial status
-      // For move-in month: rent is due on move-in date, so if move-in date has passed, it's overdue
+      // For move-in month: rent is due 24 hours after move-in date (move-in date + 1 day)
       // If first_month_paid is true and this is the move-in month, mark as paid
       let initialStatus: string;
       if (isMoveInMonth && unit.first_month_paid) {
         // First month paid - mark as paid
         initialStatus = 'paid';
         console.log(`Marking statement as paid - first month paid and this is the move-in month`);
-      } else if (isMoveInMonth) {
-        // Move-in month, first month NOT paid - due on move-in date
-        // If move-in date has passed, it's overdue
-        initialStatus = today > moveInDateObj! ? 'overdue' : 'unpaid';
-        console.log(`Move-in month statement - due date: ${moveInDateObj?.toISOString()}, status: ${initialStatus}`);
       } else {
-        // Standard month - use standard due date logic
-        const standardDueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
-        initialStatus = today > standardDueDate ? 'overdue' : 'unpaid';
+        // Use the calculated dueDate (which is move-in date + 1 day for move-in month, or standard due day otherwise)
+        initialStatus = today > dueDate ? 'overdue' : 'unpaid';
+        if (isMoveInMonth) {
+          console.log(`Move-in month statement - due date: ${dueDate.toISOString()}, status: ${initialStatus}`);
+        }
       }
       
       const { data, error } = await supabaseClient
@@ -312,7 +353,7 @@ serve(async (req) => {
           unit_id,
           period_month,
           base_rent: baseRent,
-          additional_fees: additionalFees,
+          additional_fees: totalAdditionalFees, // Include past due balance
           late_fee: lateFee,
           total_due: totalDue,
           status: initialStatus
@@ -345,6 +386,9 @@ serve(async (req) => {
           property_name: property?.name,
           period_month,
           total_due: totalDue * 100, // Convert to cents for email template
+          base_rent: baseRent * 100, // Add base rent
+          late_fee: lateFee * 100, // Add late fee
+          past_due_balance: pastDueBalance * 100, // Add past due balance
         }
       );
     } else if (lateFeeIncreased && lateFee > 0) {

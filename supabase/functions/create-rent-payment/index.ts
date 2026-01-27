@@ -18,9 +18,15 @@ const ACH_FEE_FLAT = 500; // $5.00 in cents
 const SERVICE_CHARGE = 2500; // $25.00 in cents
 const SPLIT_PAYMENT_FEE = 3000; // $30.00 in cents
 
+// Stripe processing fee constants (with padding for safety)
+// Stripe charges 2.9% + $0.30 for cards, we use 3.2% + $0.50 for padding
+const STRIPE_CARD_FEE_PERCENT = 0.032; // 3.2% (padded from 2.9%)
+const STRIPE_CARD_FEE_FLAT = 50; // $0.50 in cents (padded from $0.30)
+const STRIPE_ACH_FEE = 0; // ACH has no Stripe processing fee
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
@@ -122,19 +128,24 @@ serve(async (req) => {
     // ============================================================================
     // 
     // CRITICAL RULE: Everything the platform keeps MUST be included in 
-    // application_fee_amount. If a fee is NOT in application_fee_amount, 
-    // the landlord will receive it.
+    // application_fee_amount. This includes:
+    // - Platform fees (paymentMethodFee + $25 service charge + splitFee)
+    // - Stripe processing fees (2.9% + $0.30 for cards, $0 for ACH)
+    // 
+    // If Stripe fees are NOT in application_fee_amount, Stripe will deduct them
+    // from the landlord's transfer, causing the landlord to lose money.
     //
     // Money Flow (Guaranteed by Stripe Connect):
-    // - Tenant pays: totalAmount (baseAmount + all platform fees)
-    // - Platform receives: application_fee_amount (paymentMethodFee + $25 + splitFee)
-    // - Landlord receives: baseAmount (100% of rent + late fees, NO deductions)
-    // - Stripe processing fees: Deducted separately by Stripe from total charge
-    //   (platform absorbs these, they are NOT deducted from landlord)
+    // - Tenant pays: totalAmount (baseAmount + all platform fees + Stripe fees)
+    // - Stripe deducts: processing fees from totalAmount (covered by stripeFeeEstimate)
+    // - Platform receives: application_fee_amount (includes ALL fees, platform absorbs Stripe fees)
+    // - Landlord receives: totalAmount - application_fee_amount = baseAmount (100% rent, zero deductions)
     //
-    // NOTE: paymentMethodFee (3.75% card or $5 ACH) is the platform's fee charged
-    // to the tenant. Stripe's own processing fees (2.9% + $0.30 for cards) are 
-    // separate and deducted by Stripe from the total charge amount.
+    // Calculation Formula:
+    // 1. Calculate Stripe fee estimate: Math.ceil(amountBeforeStripeFee * 0.032 + 50) for cards
+    // 2. totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate
+    // 3. application_fee_amount = paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate
+    // 4. Result: landlordReceives = totalAmount - application_fee_amount = baseAmount (exactly)
     // ============================================================================
 
     // Handle split payment logic if enabled
@@ -272,8 +283,8 @@ serve(async (req) => {
 
     // Add payment method fee
     // NOTE: This is the platform's fee charged to the tenant (3.75% for card, $5 for ACH).
-    // Stripe's own processing fees (2.9% + $0.30 for cards) are separate and deducted
-    // by Stripe from the total charge - the platform absorbs these costs.
+    // Stripe's processing fees (2.9% + $0.30 for cards) are calculated separately and
+    // included in application_fee_amount so the platform absorbs them, not the landlord.
     if (payment_method === "card") {
       paymentMethodFee = Math.round(baseAmount * (CARD_FEE_PERCENT / 100));
     } else {
@@ -289,28 +300,52 @@ serve(async (req) => {
       logStep("Split payment fee waived - paying in full");
     }
 
-    // Total amount tenant pays = baseAmount (rent + late fees) + all platform fees
+    // Calculate Stripe processing fee estimate
+    // CRITICAL: Stripe fees must be included in application_fee_amount so platform absorbs them
+    // Calculate based on the amount that will be charged (baseAmount + platform fees)
+    // We use padded rates (3.2% + $0.50) to ensure we cover Stripe's actual fees (2.9% + $0.30)
+    const amountBeforeStripeFee = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
+    let stripeFeeEstimate = 0;
+    if (payment_method === "card") {
+      // Calculate Stripe fee with padding: 3.2% + $0.50 (covers Stripe's 2.9% + $0.30)
+      stripeFeeEstimate = Math.ceil(amountBeforeStripeFee * STRIPE_CARD_FEE_PERCENT + STRIPE_CARD_FEE_FLAT);
+      logStep("Stripe card processing fee calculated", { 
+        amountBeforeStripeFee: amountBeforeStripeFee / 100,
+        stripeFeeEstimate: stripeFeeEstimate / 100 
+      });
+    } else {
+      // ACH has no Stripe processing fee
+      stripeFeeEstimate = STRIPE_ACH_FEE;
+      logStep("Stripe ACH processing fee", { stripeFeeEstimate: 0 });
+    }
+
+    // Total amount tenant pays = baseAmount (rent + late fees) + all platform fees + Stripe fees
     // This is the sum of all line items in the checkout session
-    const totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee;
+    const totalAmount = baseAmount + paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate;
     
-    // Application fee = ALL platform fees that must be included in application_fee_amount
-    // CRITICAL: This MUST equal the sum of all platform fees (paymentMethodFee + $25 + splitFee)
-    // If any platform fee is missing from application_fee_amount, the landlord will receive it.
-    const applicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee;
+    // Application fee = ALL platform fees + Stripe fees that must be included in application_fee_amount
+    // CRITICAL: This MUST include Stripe fees so the platform absorbs them, not the landlord
+    // If Stripe fees are missing from application_fee_amount, Stripe will deduct them from the landlord's transfer
+    const applicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate;
     
-    // Validation: Ensure application_fee_amount includes ALL platform fees
-    const expectedApplicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee;
+    // Validation: Ensure application_fee_amount includes ALL platform fees AND Stripe fees
+    const expectedApplicationFee = paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate;
     if (applicationFee !== expectedApplicationFee) {
       throw new Error(
         `Application fee calculation error: expected ${expectedApplicationFee} but got ${applicationFee}. ` +
-        `All platform fees must be included in application_fee_amount.`
+        `All platform fees AND Stripe fees must be included in application_fee_amount.`
       );
     }
     
     // Enhanced logging: Show exact money flow breakdown
-    const landlordReceives = baseAmount; // Landlord gets 100% of base amount
-    const platformReceives = applicationFee; // Platform gets all fees in application_fee_amount
-    const tenantPays = totalAmount; // Tenant pays base + all fees
+    // With destination charges + application_fee_amount:
+    // - Tenant pays: totalAmount
+    // - Stripe deducts processing fees from totalAmount
+    // - Platform receives: application_fee_amount (includes Stripe fees, so platform absorbs them)
+    // - Landlord receives: totalAmount - application_fee_amount = baseAmount (100% rent, zero deductions)
+    const landlordReceives = baseAmount; // Landlord gets 100% of base amount (no deductions)
+    const platformReceives = applicationFee; // Platform gets all fees including Stripe fees
+    const tenantPays = totalAmount; // Tenant pays base + all fees including Stripe fees
     
     logStep("Fees calculated - Money Flow Breakdown", {
       tenantPays: tenantPays / 100, // Convert to dollars for readability
@@ -318,12 +353,14 @@ serve(async (req) => {
       paymentMethodFee: paymentMethodFee / 100,
       serviceCharge: SERVICE_CHARGE / 100,
       splitFee: splitFee / 100,
+      stripeFeeEstimate: stripeFeeEstimate / 100,
       platformReceives: platformReceives / 100,
       landlordReceives: landlordReceives / 100,
       validation: {
-        applicationFeeEqualsSum: applicationFee === (paymentMethodFee + SERVICE_CHARGE + splitFee),
+        applicationFeeEqualsSum: applicationFee === (paymentMethodFee + SERVICE_CHARGE + splitFee + stripeFeeEstimate),
         landlordGetsFullRent: landlordReceives === baseAmount,
-        totalMatches: tenantPays === (baseAmount + platformReceives)
+        totalMatches: tenantPays === (baseAmount + platformReceives),
+        stripeFeeIncluded: stripeFeeEstimate > 0 || payment_method === "ach"
       }
     });
 
@@ -359,13 +396,14 @@ serve(async (req) => {
       success_url: `${origin}/tenant?payment=success&statement_id=${statement_id}`,
       cancel_url: `${origin}/tenant?payment=cancelled`,
       payment_intent_data: {
-        // CRITICAL: application_fee_amount MUST include ALL platform fees
-        // (paymentMethodFee + $25 service charge + splitFee if applicable)
+        // CRITICAL: application_fee_amount MUST include ALL platform fees AND Stripe fees
+        // (paymentMethodFee + $25 service charge + splitFee + stripeFeeEstimate)
         // Stripe guarantees: Landlord receives = totalAmount - application_fee_amount = baseAmount
-        // If any platform fee is missing here, the landlord will receive it instead of the platform.
+        // If Stripe fees are missing here, Stripe will deduct them from the landlord's transfer.
         application_fee_amount: applicationFee,
         transfer_data: {
-          // Destination charge: Landlord receives baseAmount (100% of rent, no deductions)
+          // Destination charge: Landlord receives baseAmount (100% of rent, zero deductions)
+          // This is guaranteed because: totalAmount - application_fee_amount = baseAmount
           destination: landlordProfile.stripe_account_id,
         },
         metadata: {
@@ -375,6 +413,7 @@ serve(async (req) => {
           payment_method_fee: paymentMethodFee,
           service_charge: SERVICE_CHARGE,
           split_fee: splitFee,
+          stripe_fee_estimate: stripeFeeEstimate,
         },
       },
       metadata: {
@@ -418,6 +457,20 @@ serve(async (req) => {
             name: "Split Payment Fee",
           },
           unit_amount: splitFee,
+        },
+        quantity: 1,
+      });
+    }
+
+    // Add Stripe processing fee as line item (transparent to tenant)
+    if (stripeFeeEstimate > 0) {
+      sessionConfig.line_items!.push({
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: payment_method === "card" ? "Card Processing Fee (Stripe)" : "Processing Fee",
+          },
+          unit_amount: stripeFeeEstimate,
         },
         quantity: 1,
       });
@@ -572,6 +625,7 @@ serve(async (req) => {
         payment_method_fee: paymentMethodFee / 100,
         service_charge: SERVICE_CHARGE / 100,
         split_fee: splitFee / 100,
+        stripe_fee_estimate: stripeFeeEstimate / 100,
         total: totalAmount / 100,
       }
     }), {

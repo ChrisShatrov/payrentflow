@@ -14,7 +14,11 @@ const navItems = [
   { title: "Settings", url: "/admin/settings", icon: Settings },
 ] as const;
 
-export function AdminSidebar() {
+interface AdminSidebarProps {
+  onItemClick?: () => void;
+}
+
+export function AdminSidebar({ onItemClick }: AdminSidebarProps) {
   const { signOut } = useAuth();
   const navigate = useNavigate();
 
@@ -27,10 +31,16 @@ export function AdminSidebar() {
     window.location.href = "/auth";
   };
 
+  const handleItemClick = () => {
+    if (onItemClick) {
+      onItemClick();
+    }
+  };
+
   return (
-    <aside className="w-64 min-h-screen bg-card border-r border-border flex flex-col">
-      {/* Logo */}
-      <div className="p-6 border-b border-border">
+    <aside className="w-full md:w-64 h-full bg-card flex flex-col">
+      {/* Logo - Hidden on mobile since it's in the header */}
+      <div className="hidden md:block p-6 border-b border-border">
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt="RentFlow" className="w-12 h-12" />
           <div className="flex flex-col">
@@ -50,6 +60,7 @@ export function AdminSidebar() {
             key={item.title}
             to={item.url}
             end={item.url === "/admin"}
+            onClick={handleItemClick}
             className="flex items-center gap-3 px-4 py-3 rounded-lg text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
             activeClassName="bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
           >
@@ -62,7 +73,10 @@ export function AdminSidebar() {
       {/* Sign Out */}
       <div className="p-4 border-t border-border">
         <button
-          onClick={handleSignOut}
+          onClick={() => {
+            handleItemClick();
+            handleSignOut();
+          }}
           className="flex items-center gap-3 px-4 py-3 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors w-full"
         >
           <LogOut className="h-5 w-5" />

@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { format } from "date-fns";
 
 interface DashboardStats {
   properties: number;
@@ -74,30 +75,121 @@ export default function AdminDashboard() {
         // Check Stripe Connect status (function gets account from user's profile)
         checkStripeStatus();
 
-        // Fetch stats - count both unpaid and overdue statements
-        const [propertiesRes, unitsRes, statementsRes] = await Promise.all([
-          supabase.from("properties").select("id", { count: "exact" }),
+        // Fetch stats - properties and units
+        const [propertiesRes, unitsRes] = await Promise.all([
+          supabase.from("properties").select("id", { count: "exact" }).eq("landlord_id", user.id),
           supabase.from("units").select("id, tenant_id", { count: "exact" }),
-          supabase.from("statements").select("id", { count: "exact" }).in("status", ["unpaid", "overdue"]),
         ]);
 
         const units = unitsRes.data || [];
         const tenantsCount = units.filter((u) => u.tenant_id).length;
 
-        setStats({
-          properties: propertiesRes.count || 0,
-          units: unitsRes.count || 0,
-          tenants: tenantsCount,
-          unpaidStatements: statementsRes.count || 0,
-        });
-
-        // Fetch recent payments for all properties owned by this landlord
-        // First get all property IDs for this landlord
+        // Fetch unpaid statements with proper filtering
+        // First, get all properties owned by this landlord
         const { data: propertiesData } = await supabase
           .from("properties")
           .select("id")
           .eq("landlord_id", user.id);
 
+        let unpaidStatementsCount = 0;
+
+        if (propertiesData && propertiesData.length > 0) {
+          const propertyIds = propertiesData.map((p) => p.id);
+
+          // Get all units for these properties
+          const { data: unitsData } = await supabase
+            .from("units")
+            .select("id, due_day, first_month_paid")
+            .in("property_id", propertyIds);
+
+          if (unitsData && unitsData.length > 0) {
+            const unitIds = unitsData.map((u) => u.id);
+
+            // Fetch statements for these units with status unpaid or overdue
+            const { data: statementsData } = await supabase
+              .from("statements")
+              .select(`
+                id,
+                unit_id,
+                period_month,
+                total_due,
+                status
+              `)
+              .in("unit_id", unitIds)
+              .in("status", ["unpaid", "overdue"]);
+
+            // Filter statements using the same logic as Tenants tab
+            const currentMonth = format(new Date(), "MM/yyyy");
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            if (statementsData) {
+              // Fetch payments for all these statements to check if they're effectively paid
+              const statementIds = statementsData.map((s) => s.id);
+              const { data: paymentsData } = await supabase
+                .from("payments")
+                .select("statement_id, statement_amount")
+                .in("statement_id", statementIds)
+                .eq("status", "completed");
+
+              // Create a map of statement_id -> total paid
+              const paymentsMap = new Map<string, number>();
+              if (paymentsData) {
+                paymentsData.forEach((p) => {
+                  const current = paymentsMap.get(p.statement_id) || 0;
+                  paymentsMap.set(p.statement_id, current + (Number(p.statement_amount) || 0));
+                });
+              }
+
+              // Filter statements
+              const filteredStatements = statementsData.filter((statement) => {
+                const unit = unitsData.find((u) => u.id === statement.unit_id);
+                if (!unit) return false;
+
+                // Check if statement is effectively paid
+                const totalPaid = paymentsMap.get(statement.id) || 0;
+                const totalDue = Number(statement.total_due) || 0;
+                if (totalPaid >= totalDue) {
+                  return false; // Effectively paid, exclude
+                }
+
+                // If first_month_paid is true, exclude current month's statement
+                if (unit.first_month_paid && statement.period_month === currentMonth) {
+                  return false;
+                }
+
+                // Check if this is a future month's statement that isn't due yet
+                const [statementMonth, statementYear] = statement.period_month.split('/').map(Number);
+                const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
+
+                if (statementYear > currentYear || (statementYear === currentYear && statementMonth > currentMonthNum)) {
+                  // Future month - check if it's due yet based on due_day
+                  const statementDueDate = new Date(statementYear, statementMonth - 1, unit.due_day);
+                  statementDueDate.setHours(0, 0, 0, 0);
+
+                  // Only include if the due date has passed
+                  if (today <= statementDueDate) {
+                    return false; // Not due yet, exclude it
+                  }
+                }
+
+                return true;
+              });
+
+              unpaidStatementsCount = filteredStatements.length;
+            }
+          }
+        }
+
+        setStats({
+          properties: propertiesRes.count || 0,
+          units: unitsRes.count || 0,
+          tenants: tenantsCount,
+          unpaidStatements: unpaidStatementsCount,
+        });
+
+        // Fetch recent payments for all properties owned by this landlord
+        // Reuse propertiesData from above (already fetched for unpaid statements)
         if (propertiesData && propertiesData.length > 0) {
           const propertyIds = propertiesData.map((p) => p.id);
 
@@ -298,12 +390,12 @@ export default function AdminDashboard() {
 
         {/* Stripe Connect Status Card */}
         <Card className={`p-6 mb-8 ${stripeStatus === "not_connected" ? "border-destructive/50 bg-destructive/5" : stripeStatus === "pending" ? "border-yellow-500/50 bg-yellow-500/5" : "border-primary/50 bg-primary/5"}`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className={`p-3 rounded-xl ${stripeStatus === "active" ? "bg-primary/10" : stripeStatus === "pending" ? "bg-yellow-500/10" : "bg-destructive/10"}`}>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-4 flex-1 min-w-0">
+              <div className={`p-3 rounded-xl flex-shrink-0 ${stripeStatus === "active" ? "bg-primary/10" : stripeStatus === "pending" ? "bg-yellow-500/10" : "bg-destructive/10"}`}>
                 <CreditCard className={`h-6 w-6 ${stripeStatus === "active" ? "text-primary" : stripeStatus === "pending" ? "text-yellow-600" : "text-destructive"}`} />
               </div>
-              <div>
+              <div className="min-w-0 flex-1">
                 <h3 className="font-semibold text-foreground">Payment Setup</h3>
                 <p className="text-sm text-muted-foreground">
                   {stripeStatus === "loading" && "Checking Stripe Connect status..."}
@@ -313,17 +405,17 @@ export default function AdminDashboard() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-shrink-0">
               {stripeStatus === "loading" && (
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               )}
               {stripeStatus === "active" && (
                 <>
-                  <Badge className="bg-primary/10 text-primary border-0">
+                  <Badge className="bg-primary/10 text-primary border-0 whitespace-nowrap">
                     <CheckCircle2 className="h-3 w-3 mr-1" />
                     Connected
                   </Badge>
-                  <Button onClick={handleAccessStripeAccount} variant="outline" size="sm">
+                  <Button onClick={handleAccessStripeAccount} variant="outline" size="sm" className="whitespace-nowrap">
                     Access Account
                     <ExternalLink className="ml-2 h-4 w-4" />
                   </Button>
@@ -331,17 +423,17 @@ export default function AdminDashboard() {
               )}
               {stripeStatus === "pending" && (
                 <>
-                  <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 border-0">
+                  <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 border-0 whitespace-nowrap">
                     Pending
                   </Badge>
-                  <Button onClick={handleConnectStripe} disabled={connectingStripe} size="sm">
+                  <Button onClick={handleConnectStripe} disabled={connectingStripe} size="sm" className="whitespace-nowrap">
                     {connectingStripe ? <Loader2 className="h-4 w-4 animate-spin" /> : "Continue Setup"}
                     <ExternalLink className="ml-2 h-4 w-4" />
                   </Button>
                 </>
               )}
               {stripeStatus === "not_connected" && (
-                <Button onClick={handleConnectStripe} disabled={connectingStripe}>
+                <Button onClick={handleConnectStripe} disabled={connectingStripe} className="whitespace-nowrap">
                   {connectingStripe ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CreditCard className="h-4 w-4 mr-2" />}
                   Connect Stripe
                 </Button>

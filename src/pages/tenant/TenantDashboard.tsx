@@ -113,6 +113,15 @@ export default function TenantDashboard() {
     return Math.round(proratedAmount * 100) / 100;
   }, []);
 
+  // Helper function to determine if rent is prorated
+  const isProratedRent = useCallback((baseRent: number, monthlyRent: number | null | undefined): boolean => {
+    if (!monthlyRent) return false;
+    // Consider it prorated if base_rent is at least 1% different from monthly_rent
+    // This accounts for rounding differences
+    const difference = Math.abs(baseRent - monthlyRent);
+    return difference > (monthlyRent * 0.01);
+  }, []);
+
   const fetchTenantData = useCallback(async () => {
     try {
       if (!user?.id) {
@@ -421,42 +430,238 @@ export default function TenantDashboard() {
               console.log("[TenantDashboard] Found next unpaid statement:", unpaidStatements[0].period_month);
               setCurrentStatement(unpaidStatements[0]);
             } else {
-              // No unpaid statements, try to generate next month's statement
-              const today = new Date();
-              const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-              const nextMonthStr = format(nextMonth, "MM/yyyy");
+              // No unpaid statements - check if there are any statements at all
+              // If all statements are paid, account is not past due
+              const { data: allStatements } = await supabase
+                .from("statements")
+                .select("id, status, period_month")
+                .eq("unit_id", unitData.id)
+                .order("period_month", { ascending: false })
+                .limit(10);
               
-              console.log("[TenantDashboard] No unpaid statements found, generating next month:", nextMonthStr);
-              try {
-                const { data: generatedStatement } = await supabase.functions.invoke("generate-statement", {
-                  body: { unit_id: unitData.id, period_month: nextMonthStr }
-                });
+              const hasUnpaid = allStatements?.some(s => s.status !== "paid") || false;
+              
+              if (!hasUnpaid) {
+                // All statements are paid - check if we need to generate current month's statement
+                // This handles the case where January was just paid but no statement exists for current month yet
+                console.log("[TenantDashboard] All statements are paid, checking if current month statement needs to be generated");
+                
+                // Check if current month statement exists
+                const { data: currentMonthCheck } = await supabase
+                  .from("statements")
+                  .select("id")
+                  .eq("unit_id", unitData.id)
+                  .eq("period_month", currentMonth)
+                  .maybeSingle();
+                
+                if (!currentMonthCheck) {
+                  // Current month statement doesn't exist - generate it
+                  console.log("[TenantDashboard] Current month statement missing, generating it");
+                  try {
+                    const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
+                      body: { unit_id: unitData.id, period_month: currentMonth }
+                    });
 
-                if (generatedStatement) {
-                  const { data: newStatement } = await supabase
+                    if (!generateError && generatedStatement) {
+                      // Fetch the newly created statement
+                      const { data: newStatement } = await supabase
+                        .from("statements")
+                        .select("*")
+                        .eq("unit_id", unitData.id)
+                        .eq("period_month", currentMonth)
+                        .maybeSingle();
+                      
+                      if (newStatement) {
+                        console.log("[TenantDashboard] Generated current month statement:", newStatement.id);
+                        setCurrentStatement(newStatement);
+                      } else {
+                        console.log("[TenantDashboard] Statement generation completed but not found");
+                        setCurrentStatement(null);
+                        setRemainingBalance(0);
+                      }
+                    } else {
+                      console.log("[TenantDashboard] Could not generate statement:", generateError);
+                      setCurrentStatement(null);
+                      setRemainingBalance(0);
+                    }
+                  } catch (error) {
+                    console.error("[TenantDashboard] Error generating statement:", error);
+                    setCurrentStatement(null);
+                    setRemainingBalance(0);
+                  }
+                } else {
+                  // Current month statement exists - check if it's actually paid
+                  const { data: currentMonthStatement } = await supabase
                     .from("statements")
                     .select("*")
                     .eq("unit_id", unitData.id)
-                    .eq("period_month", nextMonthStr)
+                    .eq("period_month", currentMonth)
                     .maybeSingle();
                   
-                  if (newStatement) {
-                    console.log("[TenantDashboard] Generated and set next month statement:", nextMonthStr);
-                    setCurrentStatement(newStatement);
+                  if (currentMonthStatement) {
+                    if (currentMonthStatement.status === "paid") {
+                      // Statement is paid - account is up to date
+                      console.log("[TenantDashboard] Current month statement is paid, account is up to date");
+                      setCurrentStatement(null);
+                      setRemainingBalance(0);
+                    } else {
+                      // Statement exists but is unpaid - set it as current statement
+                      // remainingBalance will be calculated later
+                      console.log("[TenantDashboard] Current month statement exists but is unpaid:", currentMonthStatement.status);
+                      setCurrentStatement(currentMonthStatement);
+                    }
                   } else {
+                    // Statement check returned null somehow
+                    console.log("[TenantDashboard] Current month statement check returned null");
                     setCurrentStatement(null);
+                    setRemainingBalance(0);
                   }
+                }
+              } else {
+                // There might be statements we missed, try to find them
+                const { data: anyUnpaid } = await supabase
+                  .from("statements")
+                  .select("*")
+                  .eq("unit_id", unitData.id)
+                  .neq("status", "paid")
+                  .order("period_month", { ascending: true })
+                  .limit(1);
+                
+                if (anyUnpaid && anyUnpaid.length > 0) {
+                  setCurrentStatement(anyUnpaid[0]);
                 } else {
                   setCurrentStatement(null);
+                  setRemainingBalance(0);
                 }
-              } catch (error) {
-                console.error("Error generating next month statement:", error);
-                setCurrentStatement(null);
               }
             }
           } else if (currentMonthStatement) {
-            // Current month statement exists and is not paid
-            setCurrentStatement(currentMonthStatement);
+            // Current month statement exists - check if it's effectively paid (has completed payments)
+            // Even if status isn't updated to "paid" yet, check if payments cover the total
+            const { data: statementPayments } = await supabase
+              .from("payments")
+              .select("statement_amount")
+              .eq("statement_id", currentMonthStatement.id)
+              .eq("status", "completed");
+            
+            let isEffectivelyPaid = false;
+            if (statementPayments && statementPayments.length > 0) {
+              const totalPaid = statementPayments.reduce((sum, p) => {
+                return sum + (Number(p.statement_amount) || 0);
+              }, 0);
+              const totalDue = Number(currentMonthStatement.total_due) || 0;
+              isEffectivelyPaid = totalPaid >= totalDue;
+              
+              console.log("[TenantDashboard] Checking if statement is effectively paid:", {
+                statement_id: currentMonthStatement.id,
+                status: currentMonthStatement.status,
+                total_due: totalDue,
+                total_paid: totalPaid,
+                isEffectivelyPaid
+              });
+            }
+            
+            if (isEffectivelyPaid) {
+              // Statement is effectively paid (payments cover total), treat as paid
+              console.log("[TenantDashboard] Statement is effectively paid, looking for next unpaid statement");
+              
+              // Set remaining balance to 0 for this effectively paid statement
+              setRemainingBalance(0);
+              
+              // Find the next unpaid statement
+              const { data: unpaidStatements } = await supabase
+                .from("statements")
+                .select("*")
+                .eq("unit_id", unitData.id)
+                .in("status", ["unpaid", "overdue", "partial"])
+                .order("period_month", { ascending: true })
+                .limit(1);
+              
+              if (unpaidStatements && unpaidStatements.length > 0) {
+                console.log("[TenantDashboard] Found next unpaid statement:", unpaidStatements[0].period_month);
+                setCurrentStatement(unpaidStatements[0]);
+              } else {
+                // No unpaid statements - check if we need to generate current month's statement
+                console.log("[TenantDashboard] No unpaid statements found, checking if current month statement needs to be generated");
+                
+                // Check if current month statement exists
+                const { data: currentMonthCheck } = await supabase
+                  .from("statements")
+                  .select("id")
+                  .eq("unit_id", unitData.id)
+                  .eq("period_month", currentMonth)
+                  .maybeSingle();
+                
+                if (!currentMonthCheck) {
+                  // Current month statement doesn't exist - generate it
+                  console.log("[TenantDashboard] Current month statement missing, generating it");
+                  try {
+                    const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
+                      body: { unit_id: unitData.id, period_month: currentMonth }
+                    });
+
+                    if (!generateError && generatedStatement) {
+                      // Fetch the newly created statement
+                      const { data: newStatement } = await supabase
+                        .from("statements")
+                        .select("*")
+                        .eq("unit_id", unitData.id)
+                        .eq("period_month", currentMonth)
+                        .maybeSingle();
+                      
+                      if (newStatement) {
+                        console.log("[TenantDashboard] Generated current month statement:", newStatement.id);
+                        setCurrentStatement(newStatement);
+                      } else {
+                        console.log("[TenantDashboard] Statement generation completed but not found");
+                        setCurrentStatement(null);
+                        // remainingBalance is already set to 0 above
+                      }
+                    } else {
+                      console.log("[TenantDashboard] Could not generate statement:", generateError);
+                      setCurrentStatement(null);
+                      // remainingBalance is already set to 0 above
+                    }
+                  } catch (error) {
+                    console.error("[TenantDashboard] Error generating statement:", error);
+                    setCurrentStatement(null);
+                    // remainingBalance is already set to 0 above
+                  }
+                } else {
+                  // Current month statement exists - check if it's actually paid
+                  const { data: currentMonthStatement } = await supabase
+                    .from("statements")
+                    .select("*")
+                    .eq("unit_id", unitData.id)
+                    .eq("period_month", currentMonth)
+                    .maybeSingle();
+                  
+                  if (currentMonthStatement) {
+                    if (currentMonthStatement.status === "paid") {
+                      // Statement is paid - account is up to date
+                      console.log("[TenantDashboard] Current month statement is paid, account is up to date");
+                      setCurrentStatement(null);
+                      // remainingBalance is already set to 0 above
+                    } else {
+                      // Statement exists but is unpaid - set it as current statement
+                      // remainingBalance will be calculated later
+                      console.log("[TenantDashboard] Current month statement exists but is unpaid:", currentMonthStatement.status);
+                      setCurrentStatement(currentMonthStatement);
+                      // Don't set remainingBalance to 0 here - it will be calculated later
+                    }
+                  } else {
+                    // Statement check returned null somehow
+                    console.log("[TenantDashboard] Current month statement check returned null");
+                    setCurrentStatement(null);
+                    // remainingBalance is already set to 0 above
+                  }
+                }
+              }
+            } else {
+              // Statement is not paid, set as current
+              // remainingBalance will be calculated later in the function
+              setCurrentStatement(currentMonthStatement);
+            }
           } else {
             // If no statement for current month, try to generate one
             try {
@@ -546,36 +751,9 @@ export default function TenantDashboard() {
             console.log("[TenantDashboard] Found next month's statement:", nextMonthStr);
             setCurrentStatement(nextMonthStatement);
           } else {
-            // Try to generate next month's statement
-            try {
-              console.log("[TenantDashboard] Generating next month's statement:", nextMonthStr);
-              const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
-                body: { unit_id: unitData.id, period_month: nextMonthStr }
-              });
-
-              if (!generateError && generatedStatement) {
-                // Fetch the newly created statement
-                const { data: newStatement } = await supabase
-                  .from("statements")
-                  .select("*")
-                  .eq("unit_id", unitData.id)
-                  .eq("period_month", nextMonthStr)
-                  .maybeSingle();
-                
-                if (newStatement) {
-                  setCurrentStatement(newStatement);
-                } else {
-                  console.log("[TenantDashboard] Next month statement generated but could not fetch");
-                  setCurrentStatement(null);
-                }
-              } else {
-                console.log("[TenantDashboard] Could not generate next month's statement, will show nothing");
-                setCurrentStatement(null);
-              }
-            } catch (error) {
-              console.error("Error generating next month statement:", error);
-              setCurrentStatement(null);
-            }
+            // No next month statement - statements will be auto-generated 10 days before due date
+            console.log("[TenantDashboard] No next month statement found, waiting for auto-generation");
+            setCurrentStatement(null);
           }
           
           // Explicitly do NOT show current month's statement, even if it exists
@@ -695,50 +873,60 @@ export default function TenantDashboard() {
           }
 
           // Calculate remaining balance for current statement after partial payments
-          if (currentStatement && unitData) {
-            // Fetch all completed payments for this statement
-            const { data: statementPayments } = await supabase
-              .from("payments")
-              .select("amount, fee_amount, statement_id, statement_amount, created_at")
-              .eq("statement_id", currentStatement.id)
-              .eq("status", "completed")
-              .order("created_at", { ascending: true }); // Oldest first
-
-            if (statementPayments && statementPayments.length > 0) {
-              const statementTotalDue = Number(currentStatement.total_due);
-              
-              // Sum all statement_amount values (amount applied to statement, excluding platform fees)
-              // Formula: remaining = total_due - sum(statement_amount for all payments)
-              const totalPaidToStatement = statementPayments.reduce((sum, p) => {
-                if (p.statement_amount !== null && p.statement_amount !== undefined) {
-                  const amount = Number(p.statement_amount);
-                  console.log("[Total Rent Due] Payment contribution:", {
-                    payment_id: p.id || 'unknown',
-                    statement_amount: amount,
-                    running_total: sum + amount
-                  });
-                  return sum + amount;
-                } else {
-                  // Fallback for old payments without statement_amount
-                  // For old payments, we can't accurately calculate, so skip them
-                  // This should rarely happen after migration
-                  console.warn("[Total Rent Due] Payment missing statement_amount, skipping:", p);
-                  return sum;
-                }
-              }, 0);
-
-              const remaining = Math.max(0, statementTotalDue - totalPaidToStatement);
-              console.log("[Total Rent Due] Calculation:", {
-                statement_id: currentStatement.id,
-                statement_total_due: statementTotalDue,
-                total_paid_to_statement: totalPaidToStatement,
-                remaining_balance: remaining
-              });
-              setRemainingBalance(remaining);
+          if (!currentStatement) {
+            // No current statement means all statements are paid or none exist yet
+            console.log("[Total Rent Due] No current statement, balance is 0");
+            setRemainingBalance(0);
+          } else if (currentStatement && unitData) {
+            // If statement is paid, balance is 0
+            if (currentStatement.status === "paid") {
+              console.log("[Total Rent Due] Statement is paid, balance is 0");
+              setRemainingBalance(0);
             } else {
-              // No payments made yet, remaining balance = total_due
-              console.log("[Total Rent Due] No payments yet, using total_due:", currentStatement.total_due);
-              setRemainingBalance(Number(currentStatement.total_due));
+              // Fetch all completed payments for this statement
+              const { data: statementPayments } = await supabase
+                .from("payments")
+                .select("amount, fee_amount, statement_id, statement_amount, created_at")
+                .eq("statement_id", currentStatement.id)
+                .eq("status", "completed")
+                .order("created_at", { ascending: true }); // Oldest first
+
+              if (statementPayments && statementPayments.length > 0) {
+                const statementTotalDue = Number(currentStatement.total_due);
+                
+                // Sum all statement_amount values (amount applied to statement, excluding platform fees)
+                // Formula: remaining = total_due - sum(statement_amount for all payments)
+                const totalPaidToStatement = statementPayments.reduce((sum, p) => {
+                  if (p.statement_amount !== null && p.statement_amount !== undefined) {
+                    const amount = Number(p.statement_amount);
+                    console.log("[Total Rent Due] Payment contribution:", {
+                      payment_id: p.id || 'unknown',
+                      statement_amount: amount,
+                      running_total: sum + amount
+                    });
+                    return sum + amount;
+                  } else {
+                    // Fallback for old payments without statement_amount
+                    // For old payments, we can't accurately calculate, so skip them
+                    // This should rarely happen after migration
+                    console.warn("[Total Rent Due] Payment missing statement_amount, skipping:", p);
+                    return sum;
+                  }
+                }, 0);
+
+                const remaining = Math.max(0, statementTotalDue - totalPaidToStatement);
+                console.log("[Total Rent Due] Calculation:", {
+                  statement_id: currentStatement.id,
+                  statement_total_due: statementTotalDue,
+                  total_paid_to_statement: totalPaidToStatement,
+                  remaining_balance: remaining
+                });
+                setRemainingBalance(remaining);
+              } else {
+                // No payments made yet, remaining balance = total_due
+                console.log("[Total Rent Due] No payments yet, using total_due:", currentStatement.total_due);
+                setRemainingBalance(Number(currentStatement.total_due));
+              }
             }
           } else {
             setRemainingBalance(null);
@@ -920,19 +1108,57 @@ export default function TenantDashboard() {
     const today = new Date();
     const currentMonth = format(today, "MM/yyyy");
     
+    // If no current statement (all statements paid), calculate next month's due date
+    if (!currentStatement) {
+      const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, unit.due_day);
+      nextMonth.setHours(0, 0, 0, 0);
+      return nextMonth;
+    }
+    
+    // If current statement is paid, calculate next month's due date
+    if (currentStatement.status === "paid") {
+      const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, unit.due_day);
+      nextMonth.setHours(0, 0, 0, 0);
+      return nextMonth;
+    }
+    
+    // If remaining balance is 0, statement is effectively paid (even if status isn't updated yet)
+    // Calculate next month's due date
+    if (remainingBalance !== null && remainingBalance === 0) {
+      const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, unit.due_day);
+      nextMonth.setHours(0, 0, 0, 0);
+      return nextMonth;
+    }
+    
     // Check if we're in the move-in month
     if (unit.move_in_date) {
       const moveInDate = new Date(unit.move_in_date);
       const moveInMonth = format(moveInDate, "MM/yyyy");
       
-      // If we're in the move-in month and first month is NOT paid, due date is move-in date
+      // If we're in the move-in month and first month is NOT paid, due date is move-in date + 1 day (24 hours after move-in)
       if (currentMonth === moveInMonth && !unit.first_month_paid) {
-        // If move-in date is in the past, rent is due now (today)
-        return moveInDate < today ? today : moveInDate;
+        const moveInDueDate = new Date(moveInDate);
+        moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+        moveInDueDate.setHours(0, 0, 0, 0); // Normalize to start of day
+        // Return the actual due date (move-in + 1 day), even if it's in the past
+        return moveInDueDate;
       }
     }
     
-    // For non-move-in months or if first month is paid, use standard due day
+    // For unpaid statements, calculate due date based on statement's period_month
+    if (currentStatement.period_month) {
+      const [month, year] = currentStatement.period_month.split('/').map(Number);
+      const dueDate = new Date(year, month - 1, unit.due_day);
+      dueDate.setHours(0, 0, 0, 0);
+      
+      // If this due date has passed, it's for next month
+      if (dueDate < today) {
+        dueDate.setMonth(dueDate.getMonth() + 1);
+      }
+      return dueDate;
+    }
+    
+    // Fallback: For non-move-in months or if first month is paid, use standard due day
     const dueDate = new Date(today.getFullYear(), today.getMonth(), unit.due_day);
     if (dueDate < today) {
       dueDate.setMonth(dueDate.getMonth() + 1);
@@ -953,6 +1179,19 @@ export default function TenantDashboard() {
     const currentMonth = format(new Date(), "MM/yyyy");
     const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
     
+    // If no current statement (all statements paid), account is not past due
+    if (!currentStatement) return false;
+    
+    // If current statement is paid, account is not past due
+    if (currentStatement.status === "paid") {
+      return false;
+    }
+    
+    // If remaining balance is 0, statement is effectively paid (even if status isn't updated yet)
+    if (remainingBalance !== null && remainingBalance === 0) {
+      return false;
+    }
+    
     // Check if we're in the move-in month
     const isMoveInMonth = unit.move_in_date && 
       currentYear === new Date(unit.move_in_date).getFullYear() && 
@@ -963,27 +1202,25 @@ export default function TenantDashboard() {
       return false;
     }
     
-    // If no statement exists but we're in move-in month, check if move-in date has passed
-    if (!currentStatement && isMoveInMonth && unit.move_in_date) {
-      const moveInDate = startOfDay(new Date(unit.move_in_date));
-      // If move-in date has passed, account is past due
-      return today > moveInDate;
+    // If no statement exists but we're in move-in month, check if move-in date + 1 day has passed
+    // (This case is already handled above with !currentStatement check, but keeping for clarity)
+    
+    // If we have an unpaid statement, check if it's past due
+    if (!currentStatement.period_month) {
+      return false; // Can't determine without period_month
     }
-    
-    // If no statement and not move-in month, can't determine past due status
-    if (!currentStatement) return false;
-    
-    if (currentStatement.status === "paid") return false;
     
     const [month, year] = currentStatement.period_month.split('/').map(Number);
     
     let dueDate: Date;
     
     if (isMoveInMonth && unit.move_in_date) {
-      // For move-in month: rent is due on move-in date (or today if move-in date is in the past)
+      // For move-in month: rent is due 24 hours after move-in date (move-in date + 1 day)
       const moveInDate = startOfDay(new Date(unit.move_in_date));
-      // Due date is the move-in date (or today if already moved in)
-      dueDate = moveInDate > today ? moveInDate : today;
+      const moveInDueDate = new Date(moveInDate);
+      moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+      // Due date is move-in + 1 day (always, even if in the past)
+      dueDate = moveInDueDate;
     } else {
       // For non-move-in months: use standard due day
       dueDate = startOfDay(new Date(year, month - 1, unit.due_day));
@@ -1002,7 +1239,7 @@ export default function TenantDashboard() {
       }
     }
     
-    // Only return true if the due date has passed
+    // Only return true if the due date has passed AND the statement is not paid
     return today > dueDate;
   };
 
@@ -1011,27 +1248,22 @@ export default function TenantDashboard() {
     if (!unit) return false;
     if (!currentStatement) return true; // Allow payment to trigger statement generation
     
-    if (currentStatement.status === "paid") return false;
-    
     // Can always pay if past due
     if (isPastDue()) return true;
     
-    // DEMO MODE: Allow payment anytime for demo purposes
-    // TODO: Remove this for production - restore the 3-day restriction
-    return true;
+    // If statement is paid, check next unpaid statement's due date
+    if (currentStatement.status === "paid") {
+      const nextDue = getNextDueDate();
+      if (!nextDue) return false;
+      const daysUntil = differenceInDays(nextDue, new Date());
+      return daysUntil <= 3; // Enable 3 days before due date
+    }
     
-    // Calculate due date for the current statement's period
-    // const today = startOfDay(new Date());
-    // const [month, year] = currentStatement.period_month.split('/').map(Number);
-    // const currentMonth = format(new Date(), "MM/yyyy");
-    // const [currentMonthNum, currentYear] = currentMonth.split('/').map(Number);
-    
-    // // Check if this is the move-in month
-    // const isMoveInMonth = unit.move_in_date && 
-    //   year === currentYear && 
-    //   month === currentMonthNum;
-    
-    // let statementDueDate: Date;
+    // For unpaid statements, check if within 3 days of due date
+    const nextDue = getNextDueDate();
+    if (!nextDue) return false;
+    const daysUntil = differenceInDays(nextDue, new Date());
+    return daysUntil <= 3; // Enable 3 days before due date
     // if (isMoveInMonth && unit.move_in_date) {
     //   // For move-in month: due date is move-in date (or today if already moved in)
     //   const moveInDate = startOfDay(new Date(unit.move_in_date));
@@ -1088,9 +1320,14 @@ export default function TenantDashboard() {
   // Calculate rent due amount
   // Use remaining balance if available, otherwise use statement total_due, or calculate pro-rated if no statement
   let rentDue = 0;
-  if (remainingBalance !== null) {
+  if (!currentStatement) {
+    // No current statement means all statements are paid or none exist yet
+    rentDue = 0;
+  } else if (currentStatement.status === "paid") {
+    rentDue = 0; // Paid statement has no balance
+  } else if (remainingBalance !== null) {
     rentDue = remainingBalance;
-  } else if (currentStatement?.total_due) {
+  } else if (currentStatement.total_due) {
     rentDue = currentStatement.total_due;
   } else if (unit) {
     // No statement exists - calculate pro-rated amount if move-in date exists
@@ -1141,24 +1378,116 @@ export default function TenantDashboard() {
   const daysUntilPaymentAvailable = getDaysUntilPaymentAvailable();
 
   // Calculate late fee breakdown
+  // First, try to use the statement's stored late_fee, but also calculate breakdown for display
   const calculateLateFeeBreakdown = () => {
     if (!currentStatement || !unit || currentStatement.status === "paid") {
-      return { flatFee: 0, dailyFee: 0 };
+      return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
+    
+    // Use the statement's stored late_fee as the source of truth
+    const statementLateFee = Number(currentStatement.late_fee || 0);
+    
+    // If statement has late fees stored, use them and calculate breakdown
+    if (statementLateFee > 0) {
+      // Calculate breakdown to show flat vs daily
+      if (!currentStatement.period_month) {
+        // If we can't calculate breakdown, just show total
+        return { flatFee: statementLateFee, dailyFee: 0, totalLateFee: statementLateFee };
+      }
+      
+      const today = new Date();
+      const [month, year] = currentStatement.period_month.split('/');
+      
+      // Check if this is the move-in month
+      const isMoveInMonth = unit.move_in_date && 
+        parseInt(year) === new Date(unit.move_in_date).getFullYear() &&
+        parseInt(month) === new Date(unit.move_in_date).getMonth() + 1;
+      
+      // Calculate due date: move-in month uses move-in date + 1 day, otherwise standard due day
+      let dueDate: Date;
+      if (isMoveInMonth && unit.move_in_date) {
+        // For move-in month: rent is due 24 hours after move-in date (move-in date + 1 day)
+        const moveInDate = startOfDay(new Date(unit.move_in_date));
+        const moveInDueDate = new Date(moveInDate);
+        moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+        dueDate = moveInDueDate;
+      } else {
+        // Standard due date
+        dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+      }
+      
+      // Normalize dates to start of day for accurate calculation
+      const todayStart = startOfDay(today);
+      const dueDateStart = startOfDay(dueDate);
+      
+      if (todayStart <= dueDateStart) {
+        // Not overdue yet, but statement has late fees (might be from previous calculation)
+        return { flatFee: statementLateFee, dailyFee: 0, totalLateFee: statementLateFee };
+      }
+      
+      const daysLate = differenceInDays(todayStart, dueDateStart);
+      
+      // Calculate flat late fee (one-time fee) from unit settings
+      let flatFee = 0;
+      if (unit.late_fee_type === 'flat' && unit.late_fee_amount) {
+        flatFee = Number(unit.late_fee_amount);
+      } else if (unit.late_fee_type === 'percent' && unit.late_fee_amount) {
+        flatFee = (Number(currentStatement.base_rent) * Number(unit.late_fee_amount)) / 100;
+      }
+      
+      // Daily late fee applies starting from day 2 (daysLate - 1)
+      // Daily fee only applies for days after the first day
+      const daysForDailyFee = Math.max(0, daysLate - 1);
+      const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
+      const calculatedDailyFee = daysForDailyFee * dailyLateFeeRate;
+      
+      // Use calculated breakdown, but ensure total matches statement's late_fee
+      const calculatedTotal = flatFee + calculatedDailyFee;
+      
+      // If calculated total matches statement's late_fee, use calculated breakdown
+      // Otherwise, use statement's total and estimate breakdown
+      if (Math.abs(calculatedTotal - statementLateFee) < 0.01) {
+        return { flatFee, dailyFee: calculatedDailyFee, totalLateFee: statementLateFee };
+      } else {
+        // Statement has late fees but breakdown doesn't match - use statement total
+        // Estimate: if we have a flat fee, subtract it from total for daily fee
+        const estimatedDailyFee = Math.max(0, statementLateFee - flatFee);
+        return { flatFee, dailyFee: estimatedDailyFee, totalLateFee: statementLateFee };
+      }
+    }
+    
+    // No late fees in statement, but check if we should calculate them (statement might need regeneration)
     if (!currentStatement.period_month) {
-      return { flatFee: 0, dailyFee: 0 };
+      return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
     
     const today = new Date();
     const [month, year] = currentStatement.period_month.split('/');
-    const dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+    
+    // Check if this is the move-in month
+    const isMoveInMonth = unit.move_in_date && 
+      parseInt(year) === new Date(unit.move_in_date).getFullYear() &&
+      parseInt(month) === new Date(unit.move_in_date).getMonth() + 1;
+    
+    // Calculate due date: move-in month uses move-in date + 1 day, otherwise standard due day
+    let dueDate: Date;
+    if (isMoveInMonth && unit.move_in_date) {
+      // For move-in month: rent is due 24 hours after move-in date (move-in date + 1 day)
+      const moveInDate = startOfDay(new Date(unit.move_in_date));
+      const moveInDueDate = new Date(moveInDate);
+      moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+      dueDate = moveInDueDate;
+    } else {
+      // Standard due date
+      dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
+    }
     
     // Normalize dates to start of day for accurate calculation
     const todayStart = startOfDay(today);
     const dueDateStart = startOfDay(dueDate);
     
     if (todayStart <= dueDateStart) {
-      return { flatFee: 0, dailyFee: 0 };
+      return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
     
     const daysLate = differenceInDays(todayStart, dueDateStart);
@@ -1171,14 +1500,16 @@ export default function TenantDashboard() {
       flatFee = (Number(currentStatement.base_rent) * Number(unit.late_fee_amount)) / 100;
     }
     
-    // Daily late fee applies from day 1 (first day after due date)
-    const daysForDailyFee = Math.max(0, daysLate);
+    // Daily late fee applies starting from day 2 (daysLate - 1)
+    // Daily fee only applies for days after the first day
+    const daysForDailyFee = Math.max(0, daysLate - 1);
     const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
     const dailyFee = daysForDailyFee * dailyLateFeeRate;
     
     // Debug logging
     console.log("[TenantDashboard] Late fee calculation:", {
       periodMonth: currentStatement.period_month,
+      statementLateFee,
       dueDay: unit.due_day,
       dueDate: dueDateStart.toISOString(),
       today: todayStart.toISOString(),
@@ -1187,15 +1518,16 @@ export default function TenantDashboard() {
       dailyLateFeeRate,
       calculatedDailyFee: dailyFee,
       flatFee,
+      calculatedTotal: flatFee + dailyFee,
       unitDailyLateFee: unit.daily_late_fee,
       lateFeeType: unit.late_fee_type,
       lateFeeAmount: unit.late_fee_amount
     });
     
-    return { flatFee, dailyFee };
+    return { flatFee, dailyFee, totalLateFee: flatFee + dailyFee };
   };
 
-  const { flatFee, dailyFee } = calculateLateFeeBreakdown();
+  const { flatFee, dailyFee, totalLateFee } = calculateLateFeeBreakdown();
 
   if (loading) {
     return (
@@ -1283,8 +1615,14 @@ export default function TenantDashboard() {
                   variant="outline" 
                   className="bg-primary-foreground text-primary hover:bg-primary-foreground/90 border-0"
                   onClick={async () => {
-                    if (!currentStatement && unit) {
-                      // If no statement exists, generate one first
+                    // Always try to open payment modal if statement exists
+                    if (currentStatement) {
+                      setPaymentModalOpen(true);
+                      return;
+                    }
+                    
+                    // If no statement exists, try to generate one, but don't block the user
+                    if (unit) {
                       const currentMonth = format(new Date(), "MM/yyyy");
                       try {
                         toast.loading("Generating statement...");
@@ -1292,13 +1630,20 @@ export default function TenantDashboard() {
                           body: { unit_id: unit.id, period_month: currentMonth }
                         });
                         toast.dismiss();
+                        
                         if (error) {
                           console.error("Error generating statement:", error);
-                          toast.error(
-                            error.message || "Failed to generate statement. Please try again or contact support."
-                          );
+                          // Check if it's a skip error (move-in date issue)
+                          if (error.message?.includes("skipped") || error.message?.includes("move-in date")) {
+                            toast.error("Cannot generate statement yet. Please contact your landlord if you believe this is an error.");
+                          } else {
+                            toast.error(
+                              error.message || "Failed to generate statement. Please try again or contact support."
+                            );
+                          }
                           return;
                         }
+                        
                         // Refresh data and then open payment modal
                         await fetchTenantData();
                         // Wait a moment for state to update, then check if statement exists
@@ -1327,8 +1672,6 @@ export default function TenantDashboard() {
                         const errorMessage = err instanceof Error ? err.message : "Failed to generate statement";
                         toast.error(`Error: ${errorMessage}. Please check your connection and try again.`);
                       }
-                    } else {
-                      setPaymentModalOpen(true);
                     }
                   }}
                   disabled={!canPay || !unit || currentStatement?.status === "paid"}
@@ -1346,34 +1689,70 @@ export default function TenantDashboard() {
             </div>
 
             {/* Fee Breakdown */}
-            {currentStatement && (
-              <div className={`grid grid-cols-2 sm:grid-cols-4 gap-6 mt-8 pt-6 border-t ${
-                pastDue ? 'border-destructive-foreground/20' : 'border-primary-foreground/20'
-              }`}>
-                <div>
-                  <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Base Rent</p>
-                  <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                    ${Number(currentStatement.base_rent).toLocaleString()}
-                  </p>
-                </div>
-                {Number(currentStatement.additional_fees) > 0 && (
-                  <div>
+            {currentStatement && (() => {
+              // Collect all fee items to render (avoid empty grid cells)
+              const feeItems = [];
+              
+              // Base Rent - check if prorated
+              const isProrated = isProratedRent(Number(currentStatement.base_rent), unit?.monthly_rent);
+              if (isProrated && unit?.monthly_rent) {
+                // Show both Base Rent and Prorated Rent when prorated
+                feeItems.push(
+                  <div key="base-rent">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Base Rent</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
+                      ${Number(unit.monthly_rent).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                );
+                feeItems.push(
+                  <div key="prorate-rent">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Prorated Rent</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
+                      ${Number(currentStatement.base_rent).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                );
+              } else {
+                // Show only Base Rent when not prorated
+                feeItems.push(
+                  <div key="base-rent">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Base Rent</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
+                      ${Number(currentStatement.base_rent).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                );
+              }
+              
+              // Utilities
+              if (Number(currentStatement.additional_fees) > 0) {
+                feeItems.push(
+                  <div key="utilities">
                     <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Utilities</p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                       ${Number(currentStatement.additional_fees).toLocaleString()}
                     </p>
                   </div>
-                )}
-                {flatFee > 0 && (
-                  <div>
-                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Flat Fee</p>
+                );
+              }
+              
+              // Flat Late Fee
+              if (flatFee > 0 || (currentStatement.late_fee && Number(currentStatement.late_fee) > 0)) {
+                feeItems.push(
+                  <div key="flat-late-fee">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Flat Late Fee</p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                      ${flatFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      ${flatFee > 0 ? flatFee.toLocaleString("en-US", { minimumFractionDigits: 2 }) : (Number(currentStatement.late_fee) - dailyFee).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </p>
                   </div>
-                )}
-                {dailyFee > 0 && (
-                  <div>
+                );
+              }
+              
+              // Daily Late Fee
+              if (dailyFee > 0 || (currentStatement.late_fee && Number(currentStatement.late_fee) > 0 && dailyFee === 0 && flatFee < Number(currentStatement.late_fee))) {
+                feeItems.push(
+                  <div key="daily-late-fee">
                     <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>
                       Daily Late Fee
                       {unit.daily_late_fee && Number(unit.daily_late_fee) > 0 && (
@@ -1383,20 +1762,52 @@ export default function TenantDashboard() {
                       )}
                     </p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
-                      ${dailyFee.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      ${dailyFee > 0 ? dailyFee.toLocaleString("en-US", { minimumFractionDigits: 2 }) : (Number(currentStatement.late_fee) - flatFee).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                     </p>
                   </div>
-                )}
-                {Number(currentStatement.split_fee) > 0 && (
-                  <div>
+                );
+              }
+              
+              // Total Late Fee (if breakdown doesn't match)
+              if (currentStatement.late_fee && Number(currentStatement.late_fee) > 0 && Math.abs(totalLateFee - Number(currentStatement.late_fee)) > 0.01 && flatFee === 0 && dailyFee === 0) {
+                feeItems.push(
+                  <div key="total-late-fee">
+                    <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Total Late Fee</p>
+                    <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
+                      ${Number(currentStatement.late_fee).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                );
+              }
+              
+              // Split Fee
+              if (Number(currentStatement.split_fee) > 0) {
+                feeItems.push(
+                  <div key="split-fee">
                     <p className={`text-xs uppercase tracking-wide mb-1 ${pastDue ? 'text-destructive-foreground/60' : 'text-primary-foreground/60'}`}>Split Fee</p>
                     <p className={`text-xl font-semibold ${pastDue ? 'text-destructive-foreground' : 'text-primary-foreground'}`}>
                       ${Number(currentStatement.split_fee).toLocaleString()}
                     </p>
                   </div>
-                )}
-              </div>
-            )}
+                );
+              }
+              
+              // Only render grid if we have items
+              if (feeItems.length === 0) return null;
+              
+              // Use flexbox with wrap instead of grid to avoid empty cells
+              return (
+                <div className={`flex flex-wrap gap-6 mt-8 pt-6 border-t ${
+                  pastDue ? 'border-destructive-foreground/20' : 'border-primary-foreground/20'
+                }`}>
+                  {feeItems.map(item => (
+                    <div key={item.key} className="min-w-[120px]">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Decorative background */}
@@ -1613,6 +2024,7 @@ export default function TenantDashboard() {
         statement={currentStatement}
         allowSplitPayment={unit?.allow_split_payment || false}
         splitPaymentFee={unit?.split_payment_fee || null}
+        monthly_rent={unit?.monthly_rent || null}
       />
 
       {/* Documents Modal */}

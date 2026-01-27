@@ -31,6 +31,7 @@ interface PaymentModalProps {
   } | null;
   allowSplitPayment?: boolean;
   splitPaymentFee?: number | null;
+  monthly_rent?: number | null;
 }
 
 // Fee constants (must match edge function)
@@ -50,7 +51,8 @@ export function PaymentModal({
   onOpenChange, 
   statement,
   allowSplitPayment = false,
-  splitPaymentFee = null
+  splitPaymentFee = null,
+  monthly_rent = null
 }: PaymentModalProps) {
   const { user } = useAuth();
   const [paymentMethod, setPaymentMethod] = useState<"card" | "ach">("card");
@@ -441,10 +443,42 @@ export function PaymentModal({
                 </>
               ) : (
                 <>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Base Rent</span>
-                    <span>${Number(statement.base_rent).toFixed(2)}</span>
-                  </div>
+                  {(() => {
+                    // Helper function to determine if rent is prorated
+                    const isProratedRent = (baseRent: number, monthlyRent: number | null | undefined): boolean => {
+                      if (!monthlyRent) return false;
+                      // Consider it prorated if base_rent is at least 1% different from monthly_rent
+                      // This accounts for rounding differences
+                      const difference = Math.abs(baseRent - monthlyRent);
+                      return difference > (monthlyRent * 0.01);
+                    };
+                    
+                    const isProrated = isProratedRent(Number(statement.base_rent), monthly_rent);
+                    
+                    if (isProrated && monthly_rent) {
+                      // Show both Base Rent and Prorated Rent when prorated
+                      return (
+                        <>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Base Rent</span>
+                            <span>${Number(monthly_rent).toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Prorated Rent</span>
+                            <span>${Number(statement.base_rent).toFixed(2)}</span>
+                          </div>
+                        </>
+                      );
+                    } else {
+                      // Show only Base Rent when not prorated
+                      return (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Base Rent</span>
+                          <span>${Number(statement.base_rent).toFixed(2)}</span>
+                        </div>
+                      );
+                    }
+                  })()}
                   
                   {Number(statement.late_fee) > 0 && (
                     <div className="flex justify-between text-sm">

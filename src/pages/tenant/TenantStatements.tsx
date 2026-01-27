@@ -29,6 +29,7 @@ interface UnitData {
   late_fee_amount: number;
   daily_late_fee: number;
   first_month_paid?: boolean;
+  move_in_date?: string | null;
   property: {
     name: string;
   } | null;
@@ -63,6 +64,15 @@ export default function TenantStatements() {
     }
   }, [user]);
 
+  // Helper function to determine if rent is prorated
+  const isProratedRent = (baseRent: number, monthlyRent: number | null | undefined): boolean => {
+    if (!monthlyRent) return false;
+    // Consider it prorated if base_rent is at least 1% different from monthly_rent
+    // This accounts for rounding differences
+    const difference = Math.abs(baseRent - monthlyRent);
+    return difference > (monthlyRent * 0.01);
+  };
+
   const fetchData = async () => {
     try {
       // Fetch tenant's unit
@@ -79,6 +89,7 @@ export default function TenantStatements() {
           late_fee_amount,
           daily_late_fee,
           first_month_paid,
+          move_in_date,
           property:properties (name)
         `)
         .eq("tenant_id", user?.id)
@@ -156,9 +167,36 @@ export default function TenantStatements() {
     if (!unit || statement.status === "paid") return 0;
     
     const [month, year] = statement.period_month.split("/").map(Number);
-    const dueDate = new Date(year, month - 1, unit.due_day);
-    const today = new Date();
+    const statementMonthStart = new Date(year, month - 1, 1);
+    const statementMonthEnd = new Date(year, month, 0);
     
+    // Check if this is the move-in month
+    let dueDate: Date;
+    if (unit.move_in_date) {
+      const moveInDate = new Date(unit.move_in_date);
+      moveInDate.setHours(0, 0, 0, 0);
+      
+      // Check if move-in is in this statement month
+      if (moveInDate >= statementMonthStart && moveInDate <= statementMonthEnd) {
+        // For move-in month, due date is move-in date + 1 day
+        dueDate = new Date(moveInDate);
+        dueDate.setDate(dueDate.getDate() + 1);
+        dueDate.setHours(0, 0, 0, 0);
+      } else {
+        // Standard due date
+        dueDate = new Date(year, month - 1, unit.due_day);
+        dueDate.setHours(0, 0, 0, 0);
+      }
+    } else {
+      // Standard due date
+      dueDate = new Date(year, month - 1, unit.due_day);
+      dueDate.setHours(0, 0, 0, 0);
+    }
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Never calculate late fees if today <= dueDate
     if (today <= dueDate) return 0;
     
     const daysLate = differenceInDays(today, dueDate);
@@ -251,12 +289,38 @@ export default function TenantStatements() {
                     </div>
                     
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
-                      <div>
-                        <p className="text-xs text-muted-foreground uppercase tracking-wide">Base Rent</p>
-                        <p className="text-lg font-semibold text-foreground">
-                          ${Number(currentStatement.base_rent).toLocaleString()}
-                        </p>
-                      </div>
+                      {(() => {
+                        const isProrated = isProratedRent(Number(currentStatement.base_rent), unit?.monthly_rent);
+                        if (isProrated && unit?.monthly_rent) {
+                          // Show both Base Rent and Prorated Rent when prorated
+                          return (
+                            <>
+                              <div>
+                                <p className="text-xs text-muted-foreground uppercase tracking-wide">Base Rent</p>
+                                <p className="text-lg font-semibold text-foreground">
+                                  ${Number(unit.monthly_rent).toLocaleString()}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground uppercase tracking-wide">Prorated Rent</p>
+                                <p className="text-lg font-semibold text-foreground">
+                                  ${Number(currentStatement.base_rent).toLocaleString()}
+                                </p>
+                              </div>
+                            </>
+                          );
+                        } else {
+                          // Show only Base Rent when not prorated
+                          return (
+                            <div>
+                              <p className="text-xs text-muted-foreground uppercase tracking-wide">Base Rent</p>
+                              <p className="text-lg font-semibold text-foreground">
+                                ${Number(currentStatement.base_rent).toLocaleString()}
+                              </p>
+                            </div>
+                          );
+                        }
+                      })()}
                       {Number(currentStatement.additional_fees) > 0 && (
                         <div>
                           <p className="text-xs text-muted-foreground uppercase tracking-wide">Additional Fees</p>
@@ -265,18 +329,38 @@ export default function TenantStatements() {
                           </p>
                         </div>
                       )}
-                      {(Number(currentStatement.late_fee) > 0 || calculateCurrentLateFee(currentStatement) > 0) && (
-                        <div>
-                          <p className="text-xs text-muted-foreground uppercase tracking-wide">Late Fee</p>
-                          <p className="text-lg font-semibold text-destructive">
-                            ${Math.max(Number(currentStatement.late_fee), calculateCurrentLateFee(currentStatement)).toLocaleString()}
-                          </p>
-                        </div>
-                      )}
+                      {(() => {
+                        // Use the calculated late fee (which accounts for move-in month) instead of stored value
+                        // The stored value might be incorrect if statement was generated before the fix
+                        const calculatedLateFee = calculateCurrentLateFee(currentStatement);
+                        const storedLateFee = Number(currentStatement.late_fee) || 0;
+                        // Use calculated fee if it's different (statement needs regeneration) or if stored is 0
+                        const displayLateFee = calculatedLateFee > 0 ? calculatedLateFee : storedLateFee;
+                        
+                        if (displayLateFee > 0) {
+                          return (
+                            <div>
+                              <p className="text-xs text-muted-foreground uppercase tracking-wide">Late Fee</p>
+                              <p className="text-lg font-semibold text-destructive">
+                                ${displayLateFee.toLocaleString()}
+                              </p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                       <div>
                         <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Due</p>
                         <p className="text-2xl font-bold text-foreground">
-                          ${(Number(currentStatement.total_due) + Math.max(0, calculateCurrentLateFee(currentStatement) - Number(currentStatement.late_fee))).toLocaleString()}
+                          {(() => {
+                            const calculatedLateFee = calculateCurrentLateFee(currentStatement);
+                            const storedLateFee = Number(currentStatement.late_fee) || 0;
+                            // Recalculate total if late fee changed
+                            const baseTotal = Number(currentStatement.base_rent) + (Number(currentStatement.additional_fees) || 0);
+                            const correctLateFee = calculatedLateFee > 0 ? calculatedLateFee : storedLateFee;
+                            const correctTotal = baseTotal + correctLateFee;
+                            return `$${correctTotal.toLocaleString()}`;
+                          })()}
                         </p>
                       </div>
                     </div>
@@ -301,12 +385,56 @@ export default function TenantStatements() {
                         </a>
                       </Button>
                     )}
-                    {currentStatement.status !== "paid" && (
-                      <Button onClick={() => setPaymentModalOpen(true)}>
-                        Pay Now
-                        <ExternalLink className="ml-2 h-4 w-4" />
-                      </Button>
-                    )}
+                    {currentStatement.status !== "paid" && (() => {
+                      // Check if payment is allowed (within 3 days of due date or past due)
+                      const [month, year] = currentStatement.period_month.split("/").map(Number);
+                      const statementMonthStart = new Date(year, month - 1, 1);
+                      const statementMonthEnd = new Date(year, month, 0);
+                      
+                      // Calculate due date (accounting for move-in month)
+                      let dueDate: Date;
+                      if (unit.move_in_date) {
+                        const moveInDate = new Date(unit.move_in_date);
+                        moveInDate.setHours(0, 0, 0, 0);
+                        
+                        // Check if move-in is in this statement month
+                        if (moveInDate >= statementMonthStart && moveInDate <= statementMonthEnd) {
+                          // For move-in month, due date is move-in date + 1 day
+                          dueDate = new Date(moveInDate);
+                          dueDate.setDate(dueDate.getDate() + 1);
+                          dueDate.setHours(0, 0, 0, 0);
+                        } else {
+                          // Standard due date
+                          dueDate = new Date(year, month - 1, unit.due_day);
+                          dueDate.setHours(0, 0, 0, 0);
+                        }
+                      } else {
+                        // Standard due date
+                        dueDate = new Date(year, month - 1, unit.due_day);
+                        dueDate.setHours(0, 0, 0, 0);
+                      }
+                      
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      const daysUntilDue = differenceInDays(dueDate, today);
+                      const canPay = daysUntilDue <= 3 || today > dueDate;
+                      
+                      if (!canPay) {
+                        return (
+                          <Button disabled title={`Payment available ${daysUntilDue - 3} days before due date`}>
+                            Pay Now (Available in {daysUntilDue - 3} days)
+                            <ExternalLink className="ml-2 h-4 w-4" />
+                          </Button>
+                        );
+                      }
+                      
+                      return (
+                        <Button onClick={() => setPaymentModalOpen(true)}>
+                          Pay Now
+                          <ExternalLink className="ml-2 h-4 w-4" />
+                        </Button>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -345,7 +473,11 @@ export default function TenantStatements() {
                         {formatPeriodMonth(statement.period_month)}
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        ${Number(statement.total_due).toLocaleString()} • {format(parseISO(statement.created_at), "MMM d, yyyy")}
+                        ${Number(statement.total_due).toLocaleString()} • Due {(() => {
+                          const [month, year] = statement.period_month.split("/").map(Number);
+                          const dueDate = new Date(year, month - 1, unit.due_day);
+                          return format(dueDate, "MMM d, yyyy");
+                        })()}
                       </p>
                     </div>
                   </div>
@@ -401,6 +533,7 @@ export default function TenantStatements() {
         statement={currentStatement}
         allowSplitPayment={unit?.allow_split_payment || false}
         splitPaymentFee={unit?.split_payment_fee || null}
+        monthly_rent={unit?.monthly_rent || null}
       />
     </TenantLayout>
   );

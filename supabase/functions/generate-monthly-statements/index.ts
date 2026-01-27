@@ -10,14 +10,13 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Get current month in MM/YYYY format
+    // Get current date
     const today = new Date()
     today.setHours(0, 0, 0, 0); // Normalize to start of day for comparison
-    const currentMonth = String(today.getMonth() + 1).padStart(2, '0')
+    const currentMonth = today.getMonth() + 1
     const currentYear = today.getFullYear()
-    const periodMonth = `${currentMonth}/${currentYear}`
 
-    console.log(`Processing statements for period: ${periodMonth}`);
+    console.log(`Processing statements - checking which statements need to be generated 10 days before due date`);
 
     // Helper function to calculate pro-rated rent
     const calculateProratedRent = (moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
@@ -58,44 +57,93 @@ serve(async (req) => {
 
     console.log(`Found ${units?.length || 0} units with tenants`);
 
-    const results = []
+    const results: Array<{ unit_id: string; action?: string; period_month?: string; error?: string }> = []
 
     for (const unit of units || []) {
       try {
-        // Check move-in date logic
-        if (unit.move_in_date) {
-          const moveInDate = new Date(unit.move_in_date);
-          moveInDate.setHours(0, 0, 0, 0);
+        // Calculate target month: 10 days before due date
+        // For each month, check if we're 10 days before its due date
+        // Check current month and next month
+        for (let monthOffset = 0; monthOffset <= 1; monthOffset++) {
+          const targetMonth = currentMonth + monthOffset;
+          const targetYear = monthOffset === 0 && targetMonth > 12 ? currentYear + 1 : 
+                           monthOffset === 1 && targetMonth > 12 ? currentYear + 1 :
+                           currentYear;
+          const actualMonth = targetMonth > 12 ? targetMonth - 12 : targetMonth;
           
-          // Check if move-in date is in the future
-          if (moveInDate > today) {
-            console.log(`Skipping statement generation for unit ${unit.id} - move-in date ${unit.move_in_date} is in the future`);
+          // Calculate due date for this month
+          const dueDate = new Date(targetYear, actualMonth - 1, unit.due_day);
+          dueDate.setHours(0, 0, 0, 0);
+          
+          // Calculate target date (10 days before due date)
+          const targetDate = new Date(dueDate);
+          targetDate.setDate(targetDate.getDate() - 10);
+          
+          // Only generate if today >= targetDate (we're at or past 10 days before due date)
+          if (today < targetDate) {
+            console.log(`Skipping unit ${unit.id} - not yet 10 days before due date for ${actualMonth}/${targetYear}`);
             continue;
           }
           
-          // Check if statement period is before move-in month
-          const statementMonthStart = new Date(currentYear, today.getMonth(), 1);
-          statementMonthStart.setHours(0, 0, 0, 0);
+          const periodMonth = `${String(actualMonth).padStart(2, '0')}/${targetYear}`;
           
-          if (moveInDate > statementMonthStart) {
-            console.log(`Skipping statement generation for unit ${unit.id} - move-in date ${unit.move_in_date} is after statement period ${periodMonth}`);
-            continue;
+          // Check move-in date logic
+          if (unit.move_in_date) {
+            const moveInDate = new Date(unit.move_in_date);
+            moveInDate.setHours(0, 0, 0, 0);
+            
+            // Check if move-in date is in the future
+            if (moveInDate > today) {
+              console.log(`Skipping statement generation for unit ${unit.id} - move-in date ${unit.move_in_date} is in the future`);
+              continue;
+            }
+            
+            // Check if statement period is before move-in month
+            const statementMonthStart = new Date(targetYear, actualMonth - 1, 1);
+            statementMonthStart.setHours(0, 0, 0, 0);
+            const statementMonthEnd = new Date(targetYear, actualMonth, 0, 23, 59, 59, 999);
+            
+            // Skip only if move-in date is AFTER the end of the statement month
+            if (moveInDate > statementMonthEnd) {
+              console.log(`Skipping statement generation for unit ${unit.id} - move-in date ${unit.move_in_date} is after statement period ${periodMonth}`);
+              continue;
+            }
           }
-        }
 
-        // Skip current month if first_month_paid is true (tenant not responsible for current month)
-        if (unit.first_month_paid) {
-          console.log(`Skipping statement generation for unit ${unit.id} - first month already paid`);
-          continue;
-        }
+          // Skip if first_month_paid is true and this is the move-in month
+          if (unit.first_month_paid && unit.move_in_date) {
+            const moveInDate = new Date(unit.move_in_date);
+            const statementMonthStart = new Date(targetYear, actualMonth - 1, 1);
+            const statementMonthEnd = new Date(targetYear, actualMonth, 0, 23, 59, 59, 999);
+            
+            if (moveInDate >= statementMonthStart && moveInDate <= statementMonthEnd) {
+              console.log(`Skipping statement generation for unit ${unit.id} - first month already paid for ${periodMonth}`);
+              continue;
+            }
+          }
 
-        // Check if statement already exists
-        const { data: existing } = await supabaseClient
-          .from('statements')
-          .select('id')
-          .eq('unit_id', unit.id)
-          .eq('period_month', periodMonth)
-          .single()
+          // Check if statement already exists
+          const { data: existing } = await supabaseClient
+            .from('statements')
+            .select('id')
+            .eq('unit_id', unit.id)
+            .eq('period_month', periodMonth)
+            .maybeSingle()
+
+          // Get past due statements (unpaid/overdue statements before this period)
+          const { data: pastDueStatements } = await supabaseClient
+            .from('statements')
+            .select('*')
+            .eq('unit_id', unit.id)
+            .in('status', ['unpaid', 'overdue'])
+            .lt('period_month', periodMonth)
+            .order('period_month', { ascending: true });
+
+          // Calculate past due balance
+          const pastDueBalance = pastDueStatements?.reduce((sum, s) => 
+            sum + Number(s.total_due || 0), 0) || 0;
+
+          console.log(`Unit ${unit.id} - Past due balance: $${pastDueBalance} from ${pastDueStatements?.length || 0} statements`);
 
         if (existing) {
           // Update existing statement
@@ -103,7 +151,9 @@ serve(async (req) => {
           const baseRent = calculateProratedRent(moveInDateObj, periodMonth, Number(unit.monthly_rent));
           let lateFee = 0
 
-          const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
+          // Use the calculated due date for the target month
+          const dueDate = new Date(targetYear, actualMonth - 1, unit.due_day);
+          dueDate.setHours(0, 0, 0, 0);
 
           if (today > dueDate) {
             const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
@@ -155,13 +205,15 @@ serve(async (req) => {
 
           // Note: Split payment fee and processing fees are NOT included
           // They are calculated dynamically at payment time
-          const totalDue = baseRent + lateFee
+          // Include past due balance in total
+          const totalDue = baseRent + lateFee + pastDueBalance
 
           await supabaseClient
             .from('statements')
             .update({
               base_rent: baseRent,
               late_fee: lateFee,
+              additional_fees: pastDueBalance, // Store past due in additional_fees
               total_due: totalDue,
               status: today > dueDate ? 'overdue' : 'unpaid'
             })
@@ -181,7 +233,9 @@ serve(async (req) => {
           
           let lateFee = 0
 
-          const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
+          // Use the calculated due date for the target month
+          const dueDate = new Date(targetYear, actualMonth - 1, unit.due_day);
+          dueDate.setHours(0, 0, 0, 0);
 
           if (today > dueDate) {
             const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
@@ -233,14 +287,15 @@ serve(async (req) => {
 
           // Note: Split payment fee and processing fees are NOT included
           // They are calculated dynamically at payment time
-          const totalDue = baseRent + lateFee
+          // Include past due balance in total
+          const totalDue = baseRent + lateFee + pastDueBalance
 
           // Determine initial status
           // If first_month_paid is true and this is the move-in month, mark as paid
           let initialStatus = today > dueDate ? 'overdue' : 'unpaid';
           if (unit.first_month_paid && moveInDateObj) {
-            const statementMonthStart = new Date(currentYear, today.getMonth(), 1);
-            const statementMonthEnd = new Date(currentYear, today.getMonth() + 1, 0);
+            const statementMonthStart = new Date(targetYear, actualMonth - 1, 1);
+            const statementMonthEnd = new Date(targetYear, actualMonth, 0, 23, 59, 59, 999);
             
             // Check if this is the move-in month
             if (moveInDateObj >= statementMonthStart && moveInDateObj <= statementMonthEnd) {
@@ -255,15 +310,16 @@ serve(async (req) => {
               unit_id: unit.id,
               period_month: periodMonth,
               base_rent: baseRent,
-              additional_fees: 0,
+              additional_fees: pastDueBalance, // Store past due in additional_fees
               late_fee: lateFee,
               total_due: totalDue,
               status: initialStatus
             })
 
-          console.log(`Created new statement for unit ${unit.id}`);
-          results.push({ unit_id: unit.id, action: 'created' })
+          console.log(`Created new statement for unit ${unit.id} for ${periodMonth} with past due: $${pastDueBalance}`);
+          results.push({ unit_id: unit.id, action: 'created', period_month: periodMonth })
         }
+        } // End of monthOffset loop
       } catch (error) {
         console.error(`Error processing unit ${unit.id}:`, error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -271,16 +327,17 @@ serve(async (req) => {
       }
     }
 
-    // Mark overdue statements
+    // Mark overdue statements for all periods (not just current month)
     const { data: unpaidStatements } = await supabaseClient
       .from('statements')
       .select('*, units!inner(due_day)')
       .eq('status', 'unpaid')
-      .eq('period_month', periodMonth)
 
     for (const statement of unpaidStatements || []) {
       const unit = statement.units
-      const dueDate = new Date(currentYear, today.getMonth(), unit.due_day)
+      const [month, year] = statement.period_month.split('/').map(Number);
+      const dueDate = new Date(year, month - 1, unit.due_day)
+      dueDate.setHours(0, 0, 0, 0);
 
       if (today > dueDate) {
         await supabaseClient
@@ -297,7 +354,6 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true,
-        period_month: periodMonth,
         processed: results.length,
         results
       }),

@@ -24,6 +24,8 @@ interface NotificationRequest {
     late_fee?: number;
     daily_late_fee?: number;
     total_due?: number;
+    base_rent?: number;
+    past_due_balance?: number;
     changes?: string[];
   };
 }
@@ -296,6 +298,13 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
                       Your rent statement for <strong>${data.period_month ? formatPeriod(data.period_month) : 'the new period'}</strong> is now available.
                     </p>
                     <div style="background-color: #F9FAFB; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
+                      ${data.past_due_balance && data.past_due_balance > 0 ? `
+                        <div style="background-color: #FEF2F2; border: 1px solid #FECACA; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+                          <p style="color: #991B1B; font-size: 14px; font-weight: 600; margin: 0 0 8px 0;">⚠️ Past Due Balance</p>
+                          <p style="color: #DC2626; font-size: 20px; font-weight: 700; margin: 0;">${formatCurrency(data.past_due_balance)}</p>
+                          <p style="color: #991B1B; font-size: 12px; margin: 8px 0 0 0;">This amount from previous statements is included in your total due.</p>
+                        </div>
+                      ` : ''}
                       <table width="100%" style="border-collapse: collapse;">
                       <tr>
                           <td style="padding: 12px 0; border-bottom: 1px solid #E5E7EB;">
