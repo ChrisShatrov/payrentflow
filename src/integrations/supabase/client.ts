@@ -12,6 +12,18 @@ if (!SUPABASE_URL) {
     'Please set VITE_SUPABASE_URL in your environment variables.\n' +
     'For production, set it in your hosting platform (Vercel, Netlify, etc.) and rebuild.'
   );
+} else {
+  // Check for common URL issues
+  if (SUPABASE_URL.includes('.supabase.c') && !SUPABASE_URL.includes('.supabase.co')) {
+    console.error(
+      '❌ INVALID SUPABASE URL DETECTED!\n' +
+      `Current URL: ${SUPABASE_URL}\n` +
+      'The URL is missing ".co" - it should end with ".supabase.co" not ".supabase.c"\n' +
+      'Fix this in your hosting platform environment variables and REDEPLOY the site.'
+    );
+  } else {
+    console.log(`✅ Supabase URL configured: ${SUPABASE_URL}`);
+  }
 }
 
 if (!SUPABASE_PUBLISHABLE_KEY) {
