@@ -181,10 +181,23 @@ FRONTEND_URL=https://your-domain.com
 ```
 
 **Stripe (for payments):**
+
+**Which key to use:** Only the **Secret key** (`sk_live_...` or `sk_test_...`) is needed. The publishable key is not used.
+
+**For Production (Supabase Dashboard → Edge Functions → Secrets):**
 ```env
-STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_SECRET_KEY_PROD=sk_live_your_production_secret_key
+STRIPE_MODE=prod  # REQUIRED for production
 STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
 ```
+
+**For Local Development:**
+```env
+STRIPE_SECRET_KEY_TEST=sk_test_your_test_key
+# STRIPE_MODE not needed - automatically uses test keys
+```
+
+**Note:** See `STRIPE_KEYS_SETUP.md` for detailed setup instructions. The system automatically prevents using production keys in local development for safety.
 
 **DocuSign (for e-signatures, optional):**
 ```env

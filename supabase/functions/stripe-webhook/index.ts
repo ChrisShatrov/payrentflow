@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import Stripe from "https://esm.sh/stripe@18.5.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
+import { getStripeKey } from "../_shared/stripe-config.ts";
 
 const FAILED_ACH_FEE = 1000; // $10.00 in cents
 
@@ -64,7 +65,8 @@ async function sendNotificationEmail(
 }
 
 serve(async (req) => {
-  const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") || "", {
+  const stripeKey = getStripeKey();
+  const stripe = new Stripe(stripeKey, {
     apiVersion: "2025-08-27.basil",
   });
 
