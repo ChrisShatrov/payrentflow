@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { lease_id, type } = await req.json();
+    const { lease_id, type, days_left, recipient } = await req.json();
 
     if (!lease_id || !type) {
       return new Response(
@@ -259,6 +259,87 @@ serve(async (req) => {
         `;
         break;
 
+      case "lease_needs_signing":
+        // Send to tenant (reminder to sign)
+        recipientEmail = tenant.email;
+        recipientName = tenant.full_name || tenant.email;
+        emailSubject = `Reminder: Please Sign Your Lease - ${property.name}`;
+        emailHtml = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background-color: #f59e0b; color: white; padding: 20px; text-align: center; }
+              .content { padding: 20px; background-color: #f9fafb; }
+              .button { display: inline-block; padding: 12px 24px; background-color: #f59e0b; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+              .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>Lease Needs Your Signature</h1>
+              </div>
+              <div class="content">
+                <p>Hello ${recipientName},</p>
+                <p>This is a reminder that your lease agreement is still waiting for your signature.</p>
+                <p><strong>Property:</strong> ${property.name}</p>
+                <p><strong>Unit:</strong> ${unit.unit_number}</p>
+                <p style="text-align: center;">
+                  <a href="${leaseUrl}" class="button">Sign Lease Now</a>
+                </p>
+                <p>Please sign at your earliest convenience to complete the process.</p>
+              </div>
+              <div class="footer">
+                <p>This is an automated message from RentFlow.</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `;
+        break;
+
+      case "lease_about_to_expire":
+        // recipient: "tenant" | "landlord" (caller sends two requests)
+        const daysLeft = typeof days_left === "number" ? days_left : 30;
+        recipientEmail = recipient === "landlord" ? landlord.email : tenant.email;
+        recipientName = recipient === "landlord" ? (landlord.full_name || landlord.email) : (tenant.full_name || tenant.email);
+        emailSubject = `Lease Expiring in ${daysLeft} Days - ${property.name}`;
+        emailHtml = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background-color: #6366f1; color: white; padding: 20px; text-align: center; }
+              .content { padding: 20px; background-color: #f9fafb; }
+              .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>Lease Expiring Soon</h1>
+              </div>
+              <div class="content">
+                <p>Hello ${recipientName},</p>
+                <p>Your lease agreement for <strong>${property.name}</strong>, Unit ${unit.unit_number} will expire in ${daysLeft} days.</p>
+                <p>Consider discussing renewal or move-out with ${recipient === "landlord" ? "your tenant" : "your landlord"}.</p>
+              </div>
+              <div class="footer">
+                <p>This is an automated message from RentFlow.</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `;
+        break;
+
       default:
         return new Response(
           JSON.stringify({ error: `Unknown email type: ${type}` }),
@@ -289,14 +370,18 @@ serve(async (req) => {
 
     const emailResult = await emailResponse.json();
 
-    // Log email event if it's a reminder
-    if (type === "lease_delivered") {
+    // Log email event if it's a reminder (caller may also insert with subtype for schedule-lease-reminders)
+    if (type === "lease_delivered" || type === "lease_needs_signing" || type === "lease_about_to_expire") {
       await supabase
         .from("lease_events")
         .insert({
           lease_id: lease.id,
           type: "reminder_sent",
-          payload_json: { email_id: emailResult.id },
+          payload_json: {
+            email_id: emailResult.id,
+            subtype: type === "lease_about_to_expire" ? "lease_about_to_expire" : type === "lease_needs_signing" ? "lease_needs_signing" : "lease_delivered",
+            days_left: type === "lease_about_to_expire" ? days_left : undefined,
+          },
         });
     }
 

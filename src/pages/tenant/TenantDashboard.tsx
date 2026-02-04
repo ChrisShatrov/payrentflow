@@ -87,6 +87,7 @@ export default function TenantDashboard() {
   const [paymentStreak, setPaymentStreak] = useState<number | null>(null);
   const [remainingBalance, setRemainingBalance] = useState<number | null>(null);
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(true);
+  const [signedLeaseId, setSignedLeaseId] = useState<string | null>(null);
 
   // Helper function to calculate pro-rated rent (same logic as generate-statement)
   const calculateProratedRent = useCallback((moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
@@ -348,6 +349,11 @@ export default function TenantDashboard() {
         });
       }
 
+      if (!unitData) {
+        setUnit(null);
+        setSignedLeaseId(null);
+      }
+
       // If no unit found, try to find by email as fallback
       if (!unitData && profileData?.email) {
         console.log("[TenantDashboard] No unit found by tenant_id, trying email lookup:", profileData.email);
@@ -396,7 +402,20 @@ export default function TenantDashboard() {
       if (unitData) {
         console.log("[TenantDashboard] Unit found successfully:", unitData);
         setUnit(unitData as unknown as UnitData);
-        
+
+        // Latest completed lease for this unit (for Documents modal)
+        const { data: completedLease } = await supabase
+          .from("leases")
+          .select("id")
+          .eq("tenant_id", user.id)
+          .eq("unit_id", unitData.id)
+          .eq("status", "completed")
+          .not("pdf_signed_url", "is", null)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        setSignedLeaseId(completedLease?.id ?? null);
+
         // Set maintenance enabled status based on property setting
         const maintenanceAllowed = (unitData.property as any)?.allow_maintenance_requests ?? true;
         setMaintenanceEnabled(maintenanceAllowed);
@@ -2162,6 +2181,7 @@ export default function TenantDashboard() {
       <DocumentsModal
         open={documentsModalOpen}
         onOpenChange={setDocumentsModalOpen}
+        signedLeaseId={signedLeaseId}
         leaseUrl={unit?.lease_pdf_url}
         unitId={unit?.id}
       />

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, AlertCircle, DollarSign, X } from "lucide-react";
+import { Bell, AlertCircle, DollarSign, X, FileSignature, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -18,11 +18,12 @@ import { toast } from "sonner";
 
 interface Notification {
   id: string;
-  type: "overdue" | "late_fee";
+  type: "overdue" | "late_fee" | "lease_sign" | "lease_expire";
   title: string;
   message: string;
-  statementId: string;
-  periodMonth: string;
+  statementId?: string;
+  periodMonth?: string;
+  leaseId?: string;
   amount?: number;
   createdAt: string;
 }
@@ -57,6 +58,8 @@ export function NotificationsDropdown() {
       const dismissedIds = new Set(dismissedData?.map((d) => d.notification_id) || []);
       setDismissedNotificationIds(dismissedIds);
 
+      const today = new Date();
+
       // Fetch tenant's unit
       const { data: unitData } = await supabase
         .from("units")
@@ -64,8 +67,60 @@ export function NotificationsDropdown() {
         .eq("tenant_id", user.id)
         .maybeSingle();
 
+      // Fetch leases for this tenant (any unit they're on)
+      const { data: tenantLeases } = await supabase
+        .from("leases")
+        .select(`
+          id,
+          status,
+          end_date,
+          updated_at,
+          units!inner(unit_number, properties!inner(name))
+        `)
+        .eq("tenant_id", user.id)
+        .order("updated_at", { ascending: false });
+
+      const leaseNotifications: Notification[] = [];
+      (tenantLeases || []).forEach((lease: any) => {
+        const props = lease.units?.properties ? { name: lease.units.properties.name, unit: lease.units.unit_number } : { name: "Property", unit: "" };
+        if (lease.status === "sent" || lease.status === "delivered") {
+          const notificationId = `lease-sign-${lease.id}`;
+          if (!dismissedIds.has(notificationId)) {
+            leaseNotifications.push({
+              id: notificationId,
+              type: "lease_sign",
+              title: "Lease needs your signature",
+              message: `Your lease for ${props.name}${props.unit ? `, Unit ${props.unit}` : ""} is waiting for your signature.`,
+              leaseId: lease.id,
+              createdAt: lease.updated_at || new Date().toISOString(),
+            });
+          }
+        }
+        if (lease.status === "completed" && lease.end_date) {
+          const endDate = new Date(lease.end_date);
+          const daysLeft = Math.ceil((endDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+          if (daysLeft > 0 && daysLeft <= 90) {
+            const notificationId = `lease-expire-${lease.id}-${daysLeft <= 30 ? 30 : daysLeft <= 60 ? 60 : 90}`;
+            if (!dismissedIds.has(notificationId)) {
+              leaseNotifications.push({
+                id: notificationId,
+                type: "lease_expire",
+                title: "Lease expiring soon",
+                message: `Your lease for ${props.name}${props.unit ? `, Unit ${props.unit}` : ""} expires in ${daysLeft} days (${format(endDate, "MMM d, yyyy")}).`,
+                leaseId: lease.id,
+                createdAt: lease.updated_at || new Date().toISOString(),
+              });
+            }
+          }
+        }
+      });
+
       if (!unitData) {
-        setNotifications([]);
+        // Still show lease notifications if tenant has leases
+        const sorted = [...leaseNotifications].sort((a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setNotifications(sorted);
         setLoading(false);
         return;
       }
@@ -78,14 +133,13 @@ export function NotificationsDropdown() {
         .in("status", ["overdue", "unpaid"])
         .order("period_month", { ascending: false });
 
+      const notificationList: Notification[] = [...leaseNotifications];
       if (!statements) {
-        setNotifications([]);
+        notificationList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setNotifications(notificationList);
         setLoading(false);
         return;
       }
-
-      const today = new Date();
-      const notificationList: Notification[] = [];
 
       statements.forEach((statement) => {
         const [month, year] = statement.period_month.split("/").map(Number);
@@ -158,7 +212,11 @@ export function NotificationsDropdown() {
   };
 
   const handleNotificationClick = (notification: Notification) => {
-    navigate("/tenant/statements");
+    if (notification.type === "lease_sign" || notification.type === "lease_expire") {
+      navigate("/tenant/leases");
+    } else {
+      navigate("/tenant/statements");
+    }
     setOpen(false);
   };
 
@@ -279,10 +337,16 @@ export function NotificationsDropdown() {
                   <div className={`mt-0.5 rounded-full p-1.5 ${
                     notification.type === "overdue" 
                       ? "bg-destructive/10 text-destructive" 
-                      : "bg-amber-100 text-amber-600"
+                      : notification.type === "lease_sign" || notification.type === "lease_expire"
+                        ? "bg-primary/10 text-primary"
+                        : "bg-amber-100 text-amber-600"
                   }`}>
                     {notification.type === "overdue" ? (
                       <AlertCircle className="h-4 w-4" />
+                    ) : notification.type === "lease_sign" ? (
+                      <FileSignature className="h-4 w-4" />
+                    ) : notification.type === "lease_expire" ? (
+                      <CalendarClock className="h-4 w-4" />
                     ) : (
                       <DollarSign className="h-4 w-4" />
                     )}
@@ -322,11 +386,14 @@ export function NotificationsDropdown() {
                 size="sm"
                 className="w-full text-xs"
                 onClick={() => {
-                  navigate("/tenant/statements");
+                  const hasLeaseNotif = notifications.some((n) => n.type === "lease_sign" || n.type === "lease_expire");
+                  navigate(hasLeaseNotif ? "/tenant/leases" : "/tenant/statements");
                   setOpen(false);
                 }}
               >
-                View All Statements
+                {notifications.some((n) => n.type === "lease_sign" || n.type === "lease_expire")
+                  ? "View Leases"
+                  : "View All Statements"}
               </Button>
               <Button
                 variant="outline"

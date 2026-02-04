@@ -22,24 +22,61 @@
  */
 
 function isLocalDevelopment(): boolean {
-  // Check if we're running locally (Supabase CLI)
+  // PRIMARY CHECK: If SUPABASE_URL contains localhost, we're definitely local
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-  const isLocalhost = supabaseUrl.includes("localhost") || 
-                      supabaseUrl.includes("127.0.0.1") ||
-                      supabaseUrl.includes(".local");
+  const isLocalhostInUrl = supabaseUrl.includes("localhost") || 
+                           supabaseUrl.includes("127.0.0.1") ||
+                           supabaseUrl.includes(".local") ||
+                           supabaseUrl.startsWith("http://localhost") ||
+                           supabaseUrl.startsWith("http://127.0.0.1");
   
-  // Check environment variables
+  // SECONDARY CHECK: Check if we're running via Supabase CLI (local dev server)
+  // When running locally with 'supabase functions serve', the function runs on localhost:9999
+  // We can detect this by checking if there's no production Supabase URL set
+  // OR by checking if we're in a local Supabase CLI context
+  const isSupabaseProjectUrl = supabaseUrl.includes(".supabase.co") || 
+                               supabaseUrl.includes("supabase.com");
+  
+  // If SUPABASE_URL points to localhost, we're definitely local
+  if (isLocalhostInUrl) {
+    console.log("[STRIPE-CONFIG] Local development detected (localhost in SUPABASE_URL) - will use TEST mode");
+    return true;
+  }
+  
+  // If SUPABASE_URL is NOT a real Supabase project URL, we're likely local
+  // (Supabase CLI local dev might not set SUPABASE_URL, or might set it to localhost)
+  if (!isSupabaseProjectUrl && !supabaseUrl) {
+    console.log("[STRIPE-CONFIG] Local development detected (no production SUPABASE_URL) - will use TEST mode");
+    return true;
+  }
+  
+  // Check environment variables as a fallback
   const env = Deno.env.get("ENVIRONMENT")?.toLowerCase() || 
               Deno.env.get("NODE_ENV")?.toLowerCase() ||
               Deno.env.get("SUPABASE_ENV")?.toLowerCase();
   
-  // If explicitly set to production, trust it
-  if (env === "production" || env === "prod") {
+  // If we have a real Supabase URL and explicit production env, it's production
+  if (isSupabaseProjectUrl && (env === "production" || env === "prod")) {
+    console.log("[STRIPE-CONFIG] Production environment detected - will use PROD mode if STRIPE_MODE=prod");
     return false;
   }
   
-  // Default to local if localhost detected or no explicit production setting
-  return isLocalhost || !env || env === "development" || env === "dev" || env === "local";
+  // If we have a real Supabase URL but no explicit env, check STRIPE_MODE
+  // (This handles the case where production doesn't set ENVIRONMENT but sets STRIPE_MODE=prod)
+  if (isSupabaseProjectUrl) {
+    // Will be determined by STRIPE_MODE in getStripeKey()
+    // But if STRIPE_MODE is not set, default to test for safety
+    const stripeMode = Deno.env.get("STRIPE_MODE")?.toLowerCase();
+    if (!stripeMode || stripeMode === "test") {
+      console.log("[STRIPE-CONFIG] Real Supabase URL but STRIPE_MODE not set to 'prod' - defaulting to TEST mode for safety");
+      return true; // Default to test for safety
+    }
+    return false; // Production if STRIPE_MODE=prod is explicitly set
+  }
+  
+  // Default to local if no explicit production setting and not a real Supabase URL
+  console.log("[STRIPE-CONFIG] Defaulting to local development (no production indicators found) - will use TEST mode");
+  return !env || env === "development" || env === "dev" || env === "local";
 }
 
 export function getStripeKey(): string {
@@ -48,13 +85,15 @@ export function getStripeKey(): string {
   
   // SAFETY: If running locally and no explicit mode, default to test
   if (!mode && isLocal) {
-    console.warn("[STRIPE-CONFIG] No STRIPE_MODE set and running locally - defaulting to TEST mode for safety");
+    console.log("[STRIPE-CONFIG] No STRIPE_MODE set and running locally - defaulting to TEST mode for safety");
     const testKey = Deno.env.get("STRIPE_SECRET_KEY_TEST");
     if (testKey) {
+      console.log("[STRIPE-CONFIG] Using STRIPE_SECRET_KEY_TEST for local development");
       return testKey;
     }
     const singleKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (singleKey && singleKey.startsWith("sk_test_")) {
+      console.log("[STRIPE-CONFIG] Using STRIPE_SECRET_KEY (test key detected) for local development");
       return singleKey;
     }
     if (singleKey && singleKey.startsWith("sk_live_")) {
@@ -84,21 +123,49 @@ export function getStripeKey(): string {
   }
   
   if (mode === "prod" || mode === "production") {
-    // SAFETY: Warn if trying to use production in local environment
-    if (isLocal) {
-      console.error(
-        "[STRIPE-CONFIG] WARNING: Production mode detected in local environment! " +
-        "This could affect real user transactions. Double-check your configuration."
+    // SAFETY: Force test mode if running locally, even if STRIPE_MODE=prod
+    // Also check: if we don't have a clear production indicator (real Supabase URL + ENVIRONMENT=prod),
+    // default to test mode for safety
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const isSupabaseProjectUrl = supabaseUrl.includes(".supabase.co") || supabaseUrl.includes("supabase.com");
+    const env = Deno.env.get("ENVIRONMENT")?.toLowerCase() || Deno.env.get("NODE_ENV")?.toLowerCase();
+    const hasClearProductionIndicator = isSupabaseProjectUrl && (env === "production" || env === "prod");
+    
+    if (isLocal || !hasClearProductionIndicator) {
+      console.warn(
+        "[STRIPE-CONFIG] Production mode requested but " +
+        (isLocal ? "running locally" : "no clear production indicator found") + "! " +
+        "Forcing TEST mode to prevent using production keys with test account IDs. " +
+        "This is intentional - local development always uses test mode for safety."
+      );
+      // Force test mode for local development or ambiguous environments
+      const testKey = Deno.env.get("STRIPE_SECRET_KEY_TEST");
+      if (testKey) {
+        console.log("[STRIPE-CONFIG] Using STRIPE_SECRET_KEY_TEST (forced test mode)");
+        return testKey;
+      }
+      const singleKey = Deno.env.get("STRIPE_SECRET_KEY");
+      if (singleKey && singleKey.startsWith("sk_test_")) {
+        console.log("[STRIPE-CONFIG] Using STRIPE_SECRET_KEY (test key, forced)");
+        return singleKey;
+      }
+      throw new Error(
+        "Cannot use production mode " + (isLocal ? "locally" : "without clear production indicators") + ". " +
+        "Set STRIPE_SECRET_KEY_TEST=sk_test_... for local development, or remove STRIPE_MODE=prod."
       );
     }
     
+    // Production environment - use production keys (only if we have clear production indicators)
+    console.log("[STRIPE-CONFIG] Production mode enabled - using production Stripe keys");
     const prodKey = Deno.env.get("STRIPE_SECRET_KEY_PROD");
     if (prodKey) {
+      console.log("[STRIPE-CONFIG] Using STRIPE_SECRET_KEY_PROD");
       return prodKey;
     }
     // Fallback to single key if prod key not set
     const singleKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (singleKey && singleKey.startsWith("sk_live_")) {
+      console.log("[STRIPE-CONFIG] Using STRIPE_SECRET_KEY (production key detected)");
       return singleKey;
     }
     throw new Error("STRIPE_SECRET_KEY_PROD is not set and STRIPE_SECRET_KEY is not a production key");

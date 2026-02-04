@@ -134,8 +134,9 @@ serve(async (req) => {
     }
 
     const pdfData = await pdfResponse.json();
-    if (!pdfData?.pdf_url) {
-      console.error("PDF generation failed: No PDF URL returned", pdfData);
+    const pdfStoragePath = pdfData?.file_path || pdfData?.pdf_url;
+    if (!pdfStoragePath) {
+      console.error("PDF generation failed: No PDF URL/path returned", pdfData);
       return new Response(
         JSON.stringify({ 
           error: "Failed to generate PDF: No PDF URL returned",
@@ -145,7 +146,19 @@ serve(async (req) => {
       );
     }
 
-    // Create lease record
+    // Parse start_date and end_date from lease_data_json for reminder queries
+    const parseDate = (v: unknown): string | null => {
+      if (typeof v !== "string") return null;
+      const iso = /^\d{4}-\d{2}-\d{2}/.exec(v);
+      if (iso) return iso[0];
+      const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+      if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+      return null;
+    };
+    const startDate = parseDate(lease_data_json?.lease_start_date);
+    const endDate = parseDate(lease_data_json?.lease_end_date);
+
+    // Create lease record (store storage path for durable signed URL generation)
     const { data: lease, error: leaseError } = await supabase
       .from("leases")
       .insert({
@@ -155,7 +168,9 @@ serve(async (req) => {
         template_id,
         lease_data_json,
         status: send_for_signature ? "sent" : "draft",
-        pdf_draft_url: pdfData.pdf_url,
+        pdf_draft_url: pdfStoragePath,
+        start_date: startDate || null,
+        end_date: endDate || null,
       })
       .select()
       .single();

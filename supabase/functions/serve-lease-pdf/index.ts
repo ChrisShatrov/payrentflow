@@ -6,118 +6,150 @@ const corsHeaders = {
 };
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     const url = new URL(req.url);
-    const unitId = url.searchParams.get("unitId");
+    const leaseId = url.searchParams.get("leaseId");
+    const type = url.searchParams.get("type"); // "draft" | "signed"
+    const unitId = url.searchParams.get("unitId"); // legacy
 
-    if (!unitId) {
-      console.error("Missing unitId parameter");
-      return new Response(JSON.stringify({ error: "Missing unitId" }), {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseAnon = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabase = createClient(supabaseUrl, supabaseAnon, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    let pdfPathOrUrl: string | null = null;
+    let filename = "lease.pdf";
+
+    if (leaseId && type) {
+      // New flow: serve by lease_id and type (draft | signed)
+      if (!["draft", "signed"].includes(type)) {
+        return new Response(JSON.stringify({ error: "type must be draft or signed" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const { data: lease, error: leaseError } = await supabase
+        .from("leases")
+        .select("id, pdf_draft_url, pdf_signed_url, landlord_id, tenant_id")
+        .eq("id", leaseId)
+        .single();
+
+      if (leaseError || !lease) {
+        return new Response(JSON.stringify({ error: "Lease not found or access denied" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const isLandlord = lease.landlord_id === user.id;
+      const isTenant = lease.tenant_id === user.id;
+      if (!isLandlord && !isTenant) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (type === "draft") {
+        pdfPathOrUrl = lease.pdf_draft_url ?? null;
+        filename = `lease-draft-${leaseId}.pdf`;
+      } else {
+        pdfPathOrUrl = lease.pdf_signed_url ?? null;
+        filename = `lease-signed-${leaseId}.pdf`;
+      }
+    } else if (unitId) {
+      // Legacy: serve by unitId (units.lease_pdf_url)
+      const { data: unit, error: unitError } = await supabase
+        .from("units")
+        .select("lease_pdf_url")
+        .eq("id", unitId)
+        .single();
+
+      if (unitError || !unit) {
+        return new Response(JSON.stringify({ error: "Unit not found or access denied" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      pdfPathOrUrl = unit.lease_pdf_url ?? null;
+      filename = `lease-${unitId}.pdf`;
+    } else {
+      return new Response(JSON.stringify({ error: "Provide leaseId and type, or unitId" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get auth header
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      console.error("No authorization header");
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
+    if (!pdfPathOrUrl) {
+      return new Response(JSON.stringify({ error: "No lease PDF available" }), {
+        status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Create Supabase client with user's auth
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      {
-        global: { headers: { Authorization: authHeader } },
+    const isStoragePath = !pdfPathOrUrl.startsWith("http");
+    let pdfBuffer: ArrayBuffer;
+
+    if (isStoragePath) {
+      const { data: signedData, error: signedError } = await supabaseAdmin.storage
+        .from("leases")
+        .createSignedUrl(pdfPathOrUrl, 3600);
+
+      if (signedError || !signedData?.signedUrl) {
+        console.error("Error creating signed URL:", signedError);
+        return new Response(JSON.stringify({ error: "Failed to access lease file" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
-    );
-
-    // Get current user
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      console.error("Auth error:", authError);
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      const pdfResponse = await fetch(signedData.signedUrl);
+      if (!pdfResponse.ok) {
+        return new Response(JSON.stringify({ error: "Failed to fetch lease file" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      pdfBuffer = await pdfResponse.arrayBuffer();
+    } else {
+      const pdfResponse = await fetch(pdfPathOrUrl);
+      if (!pdfResponse.ok) {
+        return new Response(JSON.stringify({ error: "Failed to fetch lease file" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      pdfBuffer = await pdfResponse.arrayBuffer();
     }
 
-    console.log(`User ${user.id} requesting lease for unit ${unitId}`);
-
-    // Fetch unit with RLS - this ensures user has access
-    const { data: unit, error: unitError } = await supabase
-      .from("units")
-      .select("lease_pdf_url, property_id")
-      .eq("id", unitId)
-      .single();
-
-    if (unitError || !unit) {
-      console.error("Unit fetch error:", unitError);
-      return new Response(JSON.stringify({ error: "Unit not found or access denied" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (!unit.lease_pdf_url) {
-      console.error("No lease uploaded for unit");
-      return new Response(JSON.stringify({ error: "No lease uploaded" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    console.log(`Fetching lease from storage: ${unit.lease_pdf_url}`);
-
-    // Use service role to access storage
-    const supabaseAdmin = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-    );
-
-    // Generate signed URL
-    const { data: signedData, error: signedError } = await supabaseAdmin.storage
-      .from("leases")
-      .createSignedUrl(unit.lease_pdf_url, 60);
-
-    if (signedError || !signedData?.signedUrl) {
-      console.error("Error creating signed URL:", signedError);
-      return new Response(JSON.stringify({ error: "Failed to access lease file" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Fetch the PDF from Supabase storage
-    const pdfResponse = await fetch(signedData.signedUrl);
-    if (!pdfResponse.ok) {
-      console.error("Error fetching PDF:", pdfResponse.status);
-      return new Response(JSON.stringify({ error: "Failed to fetch lease file" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const pdfBuffer = await pdfResponse.arrayBuffer();
-    console.log(`Successfully fetched PDF, size: ${pdfBuffer.byteLength} bytes`);
-
-    // Stream PDF back from our domain
     return new Response(pdfBuffer, {
       status: 200,
       headers: {
         ...corsHeaders,
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="lease-${unitId}.pdf"`,
+        "Content-Disposition": `inline; filename="${filename}"`,
         "Cache-Control": "private, max-age=300",
       },
     });
