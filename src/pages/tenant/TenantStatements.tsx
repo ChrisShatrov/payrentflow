@@ -11,8 +11,10 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  Eye
 } from "lucide-react";
+import { PdfViewerModal, type PdfViewerSource } from "@/components/shared/PdfViewerModal";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { format, parseISO, differenceInDays } from "date-fns";
@@ -58,6 +60,9 @@ export default function TenantStatements() {
   const [loading, setLoading] = useState(true);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [generatingStatement, setGeneratingStatement] = useState(false);
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfViewerSource, setPdfViewerSource] = useState<PdfViewerSource | null>(null);
+  const [pdfViewerTitle, setPdfViewerTitle] = useState("Statement");
 
   useEffect(() => {
     if (user) {
@@ -153,13 +158,29 @@ export default function TenantStatements() {
         body: { unit_id: unit.id, period_month: currentMonth }
       });
 
-      if (error) throw error;
+      const skipped = (data as { skipped?: boolean } | null)?.skipped === true ||
+        (error as { skipped?: boolean; reason?: string; message?: string } | null)?.skipped === true ||
+        (error as { reason?: string; message?: string } | null)?.reason?.includes("5 days") ||
+        (error as { message?: string } | null)?.message?.includes("5 days");
+      if (skipped) {
+        toast.info("Statement will be available 5 days before the due date.");
+        return;
+      }
+      if (error) {
+        toast.error("Failed to generate statement");
+        return;
+      }
       
       toast.success("Statement generated successfully");
       fetchData(); // Refresh data
     } catch (error) {
       console.error("Error generating statement:", error);
-      toast.error("Failed to generate statement");
+      const err = error as { skipped?: boolean; reason?: string; message?: string } | null;
+      if (err?.skipped === true || err?.reason?.includes("5 days") || err?.message?.includes("5 days")) {
+        toast.info("Statement will be available 5 days before the due date.");
+      } else {
+        toast.error("Failed to generate statement");
+      }
     } finally {
       setGeneratingStatement(false);
     }
@@ -408,15 +429,28 @@ export default function TenantStatements() {
 
                   <div className="flex flex-col sm:flex-row gap-2">
                     {currentStatement.pdf_url && (
-                      <Button variant="outline" asChild>
-                        <a href={currentStatement.pdf_url} target="_blank" rel="noopener noreferrer">
-                          <Download className="h-4 w-4 mr-2" />
-                          Download PDF
-                        </a>
-                      </Button>
+                      <>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setPdfViewerSource({ type: "url", url: currentStatement.pdf_url! });
+                            setPdfViewerTitle(`Statement – ${formatPeriodMonth(currentStatement.period_month)}`);
+                            setPdfViewerOpen(true);
+                          }}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View PDF
+                        </Button>
+                        <Button variant="outline" asChild>
+                          <a href={currentStatement.pdf_url} target="_blank" rel="noopener noreferrer" download>
+                            <Download className="h-4 w-4 mr-2" />
+                            Download PDF
+                          </a>
+                        </Button>
+                      </>
                     )}
                     {currentStatement.status !== "paid" && (() => {
-                      // Check if payment is allowed (within 3 days of due date or past due)
+                      // Check if payment is allowed (within 5 days of due date or past due)
                       const [month, year] = currentStatement.period_month.split("/").map(Number);
                       const statementMonthStart = new Date(year, month - 1, 1);
                       const statementMonthEnd = new Date(year, month, 0);
@@ -447,12 +481,12 @@ export default function TenantStatements() {
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
                       const daysUntilDue = differenceInDays(dueDate, today);
-                      const canPay = daysUntilDue <= 3 || today > dueDate;
+                      const canPay = daysUntilDue <= 5 || today > dueDate;
                       
                       if (!canPay) {
                         return (
-                          <Button disabled title={`Payment available ${daysUntilDue - 3} days before due date`}>
-                            Pay Now (Available in {daysUntilDue - 3} days)
+                          <Button disabled title={`Payment available ${daysUntilDue - 5} days before due date`}>
+                            Pay Now (Available in {daysUntilDue - 5} days)
                             <ExternalLink className="ml-2 h-4 w-4" />
                           </Button>
                         );
@@ -515,11 +549,24 @@ export default function TenantStatements() {
                   <div className="flex items-center gap-3">
                     {getStatusBadge(statement.status)}
                     {statement.pdf_url ? (
-                      <Button variant="ghost" size="sm" asChild>
-                        <a href={statement.pdf_url} target="_blank" rel="noopener noreferrer">
-                          <Download className="h-4 w-4" />
-                        </a>
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setPdfViewerSource({ type: "url", url: statement.pdf_url! });
+                            setPdfViewerTitle(`Statement – ${formatPeriodMonth(statement.period_month)}`);
+                            setPdfViewerOpen(true);
+                          }}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="sm" asChild>
+                          <a href={statement.pdf_url} target="_blank" rel="noopener noreferrer" download>
+                            <Download className="h-4 w-4" />
+                          </a>
+                        </Button>
+                      </div>
                     ) : (
                       <Button variant="ghost" size="sm" disabled>
                         <Download className="h-4 w-4 opacity-50" />
@@ -572,6 +619,14 @@ export default function TenantStatements() {
           move_in_date: unit.move_in_date,
           addons: (unit.addons as Array<{name: string, price: number}> | null) || null
         } : null}
+      />
+
+      <PdfViewerModal
+        open={pdfViewerOpen}
+        onOpenChange={setPdfViewerOpen}
+        source={pdfViewerSource}
+        title={pdfViewerTitle}
+        downloadFilename="statement.pdf"
       />
     </TenantLayout>
   );

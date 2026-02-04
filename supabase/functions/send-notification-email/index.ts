@@ -13,7 +13,8 @@ interface NotificationRequest {
     | "payment_failed" 
     | "late_fee_applied" 
     | "statement_generated"
-    | "unit_updated";
+    | "unit_updated"
+    | "unit_assigned";
   tenant_id?: string;
   landlord_id?: string;
   data: {
@@ -370,6 +371,48 @@ const getEmailTemplate = (type: string, data: NotificationRequest['data']): { su
                         ${(data.changes || []).map(change => `<li style="margin-bottom: 8px;">${change}</li>`).join('')}
                       </ul>
                     </div>
+                    <div style="text-align: center; padding-top: 24px; border-top: 1px solid #E5E7EB;">
+                      <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">This is an automated notification from</p>
+                      <p style="margin: 0;">
+                        <span style="color: ${primaryColor}; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Rent</span><span style="color: #111827; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">Flow</span>
+                    </p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </body>
+          </html>
+        `,
+      };
+
+    case "unit_assigned":
+      return {
+        subject: `You've been assigned to ${data.property_name || "a property"}${data.unit_number ? ` - Unit ${data.unit_number}` : ""}`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+            <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+            <body style="${baseStyles}">
+              <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+                <tr>
+                  <td style="background: ${headerGradient}; border-radius: 12px 12px 0 0; padding: 32px 40px; text-align: center;">
+                    <div style="margin-bottom: 20px;">
+                      <div style="display: inline-block; width: 48px; height: 48px; background: rgba(255,255,255,0.25); border-radius: 12px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);">
+                        <span style="font-size: 28px; color: white;">✓</span>
+                      </div>
+                    </div>
+                    <h1 style="color: white; margin: 0 0 8px 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">You've been assigned</h1>
+                    <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 16px; font-weight: 400;">Your landlord has assigned you to a rental unit</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: white; padding: 40px; border-radius: 0 0 12px 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);">
+                    <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+                      You have been assigned to <strong>${data.property_name || "your property"}</strong>${data.unit_number ? `, Unit <strong>${data.unit_number}</strong>` : ""}.
+                    </p>
+                    <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 24px;">
+                      Log in to your tenant dashboard to view your rental details, statements, and make payments.
+                    </p>
                     <div style="text-align: center; padding-top: 24px; border-top: 1px solid #E5E7EB;">
                       <p style="color: #6B7280; font-size: 13px; margin: 0 0 8px 0;">This is an automated notification from</p>
                       <p style="margin: 0;">

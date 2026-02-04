@@ -14,11 +14,27 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Users, Mail, Phone, FileText, Download, Loader2 } from "lucide-react";
+import { Users, Mail, Phone, FileText, Download, Loader2, Eye } from "lucide-react";
+import { PdfViewerModal, type PdfViewerSource } from "@/components/shared/PdfViewerModal";
 import { format } from "date-fns";
+
+interface StatementBreakdown {
+  period_month: string;
+  total_due: number;
+  base_rent: number;
+  late_fee: number;
+  additional_fees: number;
+  split_fee: number;
+}
 
 interface TenantData {
   id: string;
@@ -31,6 +47,7 @@ interface TenantData {
   monthlyRent: number | null;
   status: "active" | "pending" | "inactive";
   totalOwed: number;
+  owedBreakdown: StatementBreakdown[];
   leaseUrl: string | null;
 }
 
@@ -41,6 +58,9 @@ export default function AdminTenants() {
   const [leaseDialogOpen, setLeaseDialogOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<TenantData | null>(null);
   const [downloadingTenantId, setDownloadingTenantId] = useState<string | null>(null);
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfSource, setPdfSource] = useState<PdfViewerSource | null>(null);
+  const [pdfTitle, setPdfTitle] = useState("Lease");
 
   const fetchTenants = async () => {
     if (!user) {
@@ -105,10 +125,10 @@ export default function AdminTenants() {
       // Get unit IDs for filtering statements
       const unitIds = units.map((u) => u.id);
 
-      // Fetch unpaid/overdue statements only for this landlord's units
+      // Fetch unpaid/overdue statements with breakdown for this landlord's units
       const { data: statements, error: statementsError } = await supabase
         .from("statements")
-        .select("unit_id, total_due, status, period_month")
+        .select("unit_id, total_due, status, period_month, base_rent, late_fee, additional_fees, split_fee")
         .in("status", ["unpaid", "partial", "overdue"])
         .in("unit_id", unitIds);
 
@@ -154,6 +174,14 @@ export default function AdminTenants() {
             })
           : [];
         const totalOwed = tenantStatements.reduce((sum, s) => sum + Number(s.total_due), 0);
+        const owedBreakdown: StatementBreakdown[] = tenantStatements.map((s) => ({
+          period_month: s.period_month,
+          total_due: Number(s.total_due),
+          base_rent: Number(s.base_rent ?? 0),
+          late_fee: Number(s.late_fee ?? 0),
+          additional_fees: Number(s.additional_fees ?? 0),
+          split_fee: Number(s.split_fee ?? 0),
+        }));
 
         // Determine status
         let status: "active" | "pending" | "inactive" = "pending";
@@ -172,6 +200,7 @@ export default function AdminTenants() {
           monthlyRent: unit?.monthly_rent || null,
           status,
           totalOwed,
+          owedBreakdown,
           leaseUrl: unit?.lease_pdf_url || null,
         };
       });
@@ -190,6 +219,37 @@ export default function AdminTenants() {
     }
   }, [user]);
 
+  const baseUrl = import.meta.env.VITE_SUPABASE_URL;
+
+  const handleViewLease = async (tenant: TenantData) => {
+    if (!tenant.unitId || !tenant.leaseUrl) return;
+    setDownloadingTenantId(tenant.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Please sign in to view documents");
+        return;
+      }
+      const response = await fetch(
+        `${baseUrl}/functions/v1/serve-lease-pdf?unitId=${tenant.unitId}`,
+        { headers: { Authorization: `Bearer ${session.access_token}` } }
+      );
+      if (!response.ok) {
+        toast.error("Failed to load lease document");
+        return;
+      }
+      const blob = await response.blob();
+      setPdfSource({ type: "blob", blob });
+      setPdfTitle(`Lease – ${tenant.full_name || tenant.email}`);
+      setPdfViewerOpen(true);
+    } catch (error) {
+      console.error("Error loading lease:", error);
+      toast.error("Failed to load lease document");
+    } finally {
+      setDownloadingTenantId(null);
+    }
+  };
+
   const handleDownloadLease = async (tenant: TenantData) => {
     if (!tenant.unitId || !tenant.leaseUrl) return;
     
@@ -202,7 +262,7 @@ export default function AdminTenants() {
       }
 
       const response = await fetch(
-        `https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/serve-lease-pdf?unitId=${tenant.unitId}`,
+        `${baseUrl}/functions/v1/serve-lease-pdf?unitId=${tenant.unitId}`,
         {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
@@ -333,9 +393,38 @@ export default function AdminTenants() {
                     <TableCell>{getStatusBadge(tenant.status)}</TableCell>
                     <TableCell className="text-right">
                       {tenant.totalOwed > 0 ? (
-                        <span className="font-medium text-destructive">
-                          ${tenant.totalOwed.toLocaleString()}
-                        </span>
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="font-medium text-destructive cursor-help underline decoration-dashed decoration-destructive/50 underline-offset-2">
+                                ${tenant.totalOwed.toLocaleString()}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="left" className="max-w-sm p-3 text-left">
+                              <div className="font-semibold mb-2">How this total is calculated</div>
+                              <div className="space-y-2 text-xs">
+                                {tenant.owedBreakdown.map((s) => {
+                                  const [mm, yyyy] = s.period_month.split("/");
+                                  const periodLabel = format(new Date(Number(yyyy), Number(mm) - 1), "MMM yyyy");
+                                  const parts: string[] = [];
+                                  if (s.base_rent > 0) parts.push(`Base rent $${s.base_rent.toLocaleString()}`);
+                                  if (s.late_fee > 0) parts.push(`Late fee $${s.late_fee.toLocaleString()}`);
+                                  if (s.additional_fees > 0) parts.push(`Other $${s.additional_fees.toLocaleString()}`);
+                                  if (s.split_fee > 0) parts.push(`Split fee $${s.split_fee.toLocaleString()}`);
+                                  return (
+                                    <div key={s.period_month} className="border-b border-border/50 pb-1.5 last:border-0 last:pb-0">
+                                      <span className="font-medium">{periodLabel}:</span>{" "}
+                                      {parts.length ? parts.join(" + ") : "—"} = ${s.total_due.toLocaleString()}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="mt-2 pt-2 border-t border-border font-medium">
+                                Total past due: ${tenant.totalOwed.toLocaleString()}
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       ) : (
                         <span className="text-muted-foreground">$0</span>
                       )}
@@ -344,20 +433,32 @@ export default function AdminTenants() {
                       {tenant.unitId ? (
                         <div className="flex items-center justify-center gap-1">
                           {tenant.leaseUrl && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={downloadingTenantId === tenant.id}
-                              onClick={() => handleDownloadLease(tenant)}
-                              className="gap-1.5"
-                            >
-                              {downloadingTenantId === tenant.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={downloadingTenantId === tenant.id}
+                                onClick={() => handleViewLease(tenant)}
+                                className="gap-1.5"
+                              >
+                                {downloadingTenantId === tenant.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Eye className="h-3.5 w-3.5" />
+                                )}
+                                View
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={downloadingTenantId === tenant.id}
+                                onClick={() => handleDownloadLease(tenant)}
+                                className="gap-1.5"
+                              >
                                 <Download className="h-3.5 w-3.5" />
-                              )}
-                              Download
-                            </Button>
+                                Download
+                              </Button>
+                            </>
                           )}
                           <Button
                             variant="secondary"
@@ -381,6 +482,14 @@ export default function AdminTenants() {
             </Table>
           </div>
         )}
+
+        <PdfViewerModal
+          open={pdfViewerOpen}
+          onOpenChange={setPdfViewerOpen}
+          source={pdfSource}
+          title={pdfTitle}
+          downloadFilename="lease.pdf"
+        />
 
         {/* Lease Upload Dialog */}
         {selectedTenant && selectedTenant.unitId && (

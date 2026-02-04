@@ -16,7 +16,7 @@ serve(async (req) => {
     const currentMonth = today.getMonth() + 1
     const currentYear = today.getFullYear()
 
-    console.log(`Processing statements - checking which statements need to be generated 10 days before due date`);
+    console.log(`Processing statements - checking which statements need to be generated 5 days before due date`);
 
     // Helper function to calculate pro-rated rent
     const calculateProratedRent = (moveInDate: Date | null, periodMonth: string, monthlyRent: number): number => {
@@ -61,8 +61,8 @@ serve(async (req) => {
 
     for (const unit of units || []) {
       try {
-        // Calculate target month: 10 days before due date
-        // For each month, check if we're 10 days before its due date
+        // Calculate target month: 5 days before due date
+        // For each month, check if we're 5 days before its due date
         // Check current month and next month
         for (let monthOffset = 0; monthOffset <= 1; monthOffset++) {
           const targetMonth = currentMonth + monthOffset;
@@ -75,13 +75,13 @@ serve(async (req) => {
           const dueDate = new Date(targetYear, actualMonth - 1, unit.due_day);
           dueDate.setHours(0, 0, 0, 0);
           
-          // Calculate target date (10 days before due date)
+          // Calculate target date (5 days before due date)
           const targetDate = new Date(dueDate);
-          targetDate.setDate(targetDate.getDate() - 10);
+          targetDate.setDate(targetDate.getDate() - 5);
           
-          // Only generate if today >= targetDate (we're at or past 10 days before due date)
+          // Only generate if today >= targetDate (we're at or past 5 days before due date)
           if (today < targetDate) {
-            console.log(`Skipping unit ${unit.id} - not yet 10 days before due date for ${actualMonth}/${targetYear}`);
+            console.log(`Skipping unit ${unit.id} - not yet 5 days before due date for ${actualMonth}/${targetYear}`);
             continue;
           }
           

@@ -430,6 +430,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
               (() => {
                 const prorated = calculateProratedRent(moveInDate, parseFloat(monthlyRent));
                 const monthlyRentValue = parseFloat(monthlyRent);
+                const displayAmount = firstMonthPaid ? 0 : (prorated ?? monthlyRentValue);
                 
                 return (
                   <div className="bg-muted/50 p-3 rounded-lg border border-border">
@@ -438,10 +439,10 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                       <p className="text-xs text-muted-foreground">
                         Monthly Rent: ${monthlyRentValue.toFixed(2)}
                       </p>
-                      {prorated !== null ? (
+                      {prorated !== null || firstMonthPaid ? (
                         <>
                           <p className="text-lg font-semibold text-primary">
-                            Pro-rated Amount: ${prorated.toFixed(2)}
+                            Pro-rated Amount: ${displayAmount.toFixed(2)}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {firstMonthPaid 
@@ -451,9 +452,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                         </>
                       ) : (
                         <p className="text-sm text-muted-foreground">
-                          {firstMonthPaid 
-                            ? "✅ First month paid - Tenant won't owe anything until the due date of the following month."
-                            : `Full month rent: $${monthlyRentValue.toFixed(2)} (move-in is on the 1st)`}
+                          {`Full month rent: $${monthlyRentValue.toFixed(2)} (move-in is on the 1st)`}
                         </p>
                       )}
                     </div>

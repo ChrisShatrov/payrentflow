@@ -27,17 +27,16 @@ You **cannot** create or use Integration Keys in a **production** DocuSign accou
 
 ## 3. Add Redirect URI (required for “Connect DocuSign”)
 
-The error **“The redirect URI is not registered properly with Docusign”** means DocuSign doesn’t have this URL in the app’s allowed list. Add it **exactly** (no trailing slash, `https`):
+DocuSign must redirect to your **frontend** URL (not the Supabase function). Add your app’s Settings URL **exactly** (no trailing slash):
 
 1. Open your app (e.g. RentFlow) in the DocuSign Developer Center → **Apps and Keys** → click the app.
 2. Find **“Redirect URIs”** (often under **Authentication** or **General Info**).
-3. Click **“Add URI”** and paste **exactly** (use your real project ref):
-   ```text
-   https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/docusign-callback
-   ```
-   If your Supabase URL is `https://xxxxx.supabase.co`, use `xxxxx` in place of `heismaqehgqxcrndtqmz`.
+3. Click **“Add URI”** and add your **frontend** URL:
+   - **Production:** `https://www.payrentflow.com/admin/settings` (or your real domain)
+   - **Local dev:** `http://localhost:5173/admin/settings`
+   Add both if you test on localhost and production.
 4. **Save** (some UIs require a separate Save button).
-5. Wait a minute and try “Connect DocuSign” again.
+5. Try “Connect DocuSign” again. After you authorize, DocuSign redirects to this URL with `?code=...&state=...`; the app then exchanges the code with your auth and completes the connection.
 
 ---
 
@@ -89,3 +88,23 @@ supabase functions deploy get-embedded-signing-url
 | OAuth base URL (demo) | `DOCUSIGN_BASE_URL`              | `https://account-d.docusign.com`            |
 
 If you still see “No Integration Keys found,” you are in the **production** Apps and Keys; switch to the **developer** site (developer.docusign.com) and create the app there.
+
+---
+
+## Troubleshooting: "The redirect URI is not registered properly with Docusign"
+
+This error appears when DocuSign does not have the exact callback URL in the app's Redirect URIs. It can happen on **localhost** or production; the redirect URI is always the **deployed** Supabase URL (the Edge Function runs on Supabase).
+
+**Checklist:**
+
+1. **Same app as your Integration Key** – The `client_id` in the DocuSign error URL must be the app where you added the URI. In DocuSign Developer Center → Apps and Keys, open the app whose **Integration Key** matches the one in Supabase (`DOCUSIGN_INTEGRATION_KEY`). Add the redirect URI there.
+
+2. **Exact URL, no typo** – In that app's **Redirect URIs**, add **exactly** (no trailing slash, `https`): `https://heismaqehgqxcrndtqmz.supabase.co/functions/v1/docusign-callback` If your project ref is different, use your ref. Copy-paste; do not type by hand.
+
+3. **Save in DocuSign** – Click **Save** so the new URI is stored.
+
+4. **No wrong redirect in Supabase** – In Supabase → Edge Functions → Secrets, if `DOCUSIGN_REDIRECT_URI` is set, it must be exactly the same URL. If unsure, remove it so the function uses the default.
+
+5. **Localhost is fine** – When you click Connect DocuSign from localhost, the request goes to the **deployed** Supabase function. You do not need a localhost redirect URI in DocuSign.
+
+6. **Retry** – Wait a minute after saving in DocuSign, then try again (incognito can help).

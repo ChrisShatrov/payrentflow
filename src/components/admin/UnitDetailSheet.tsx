@@ -89,6 +89,36 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     move_in_date: "",
   });
   const [addons, setAddons] = useState<Array<{name: string, price: number}>>([]);
+  const [syncingTenantLink, setSyncingTenantLink] = useState(false);
+
+  const handleSyncTenantLink = async () => {
+    if (!unit || !formData.tenant_id || formData.tenant_id === "__none__") return;
+    const selectedTenant = tenants.find((t) => t.id === formData.tenant_id);
+    if (!selectedTenant?.email) {
+      toast.error("No email for selected tenant");
+      return;
+    }
+    setSyncingTenantLink(true);
+    try {
+      const { data: ok, error } = await supabase.rpc("sync_unit_tenant_to_profile_by_email", {
+        p_unit_id: unit.id,
+        p_tenant_email: selectedTenant.email,
+        p_tenant_id: formData.tenant_id,
+      });
+      if (error) throw error;
+      if (ok) {
+        toast.success("Tenant link synced. Ask the tenant to refresh their dashboard.");
+        onUnitUpdated?.();
+      } else {
+        toast.error("Sync failed. Ensure you own this unit and the tenant has signed up (so their profile exists).");
+      }
+    } catch (e) {
+      console.error("Sync tenant link error:", e);
+      toast.error("Failed to sync tenant link");
+    } finally {
+      setSyncingTenantLink(false);
+    }
+  };
 
   const fetchTenants = async () => {
     try {
@@ -265,6 +295,10 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     const unitAddons = (unit as any).addons || [];
     const parsedAddons = Array.isArray(unitAddons) ? unitAddons : [];
     
+    // Only keep unit.tenant_id in form if that profile still exists in tenants list (avoids dangling id after claim)
+    const tenantIdInList = unit.tenant_id && tenants.some((t) => t.id === unit.tenant_id);
+    const formTenantId = tenantIdInList ? unit.tenant_id : "";
+    
     setFormData({
       monthly_rent: unit.monthly_rent,
       due_day: unit.due_day,
@@ -272,7 +306,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
       daily_late_fee: unit.daily_late_fee,
       allow_split_payment: unit.allow_split_payment,
       split_payment_fee: unit.split_payment_fee || 30.00,
-      tenant_id: unit.tenant_id || "",
+      tenant_id: formTenantId,
       first_month_paid: unit.first_month_paid || false,
       move_in_date: moveInDateFormatted,
     });
@@ -400,6 +434,25 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         }
       }
 
+      // Sync unit tenant to the profile that currently has the selected tenant's email (fixes dangling tenant_id after tenant signup)
+      if (updateData.tenant_id) {
+        const selectedTenantEmail = tenants.find((t) => t.id === updateData.tenant_id)?.email;
+        if (selectedTenantEmail) {
+          const { data: syncOk, error: syncErr } = await supabase.rpc("sync_unit_tenant_to_profile_by_email", {
+            p_unit_id: unit.id,
+            p_tenant_email: selectedTenantEmail,
+            p_tenant_id: updateData.tenant_id,
+          });
+          if (!syncErr && syncOk) {
+            console.log("[UnitDetailSheet] Synced unit tenant to profile by email:", selectedTenantEmail);
+          } else if (!syncOk) {
+            toast.warning("Tenant link could not be synced. Re-select the tenant from the dropdown and save again.");
+          }
+        } else {
+          toast.warning("Re-select the tenant from the dropdown and save so they can see their unit.");
+        }
+      }
+
       // Auto-generate statement if tenant was just assigned with move-in date
       const wasTenantJustAssigned = (!unit.tenant_id || unit.tenant_id === "") && updateData.tenant_id;
       if (wasTenantJustAssigned && formData.move_in_date) {
@@ -426,6 +479,42 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         } catch (error) {
           console.error("Exception generating statement:", error);
           // Don't show error to user - statement might already exist
+        }
+      }
+
+      // Notify tenant when they are newly assigned to this unit (email + in-app)
+      if (wasTenantJustAssigned && updateData.tenant_id) {
+        const { data: unitDataForEmail } = await supabase
+          .from("units")
+          .select("property_id, properties!inner(name)")
+          .eq("id", unit.id)
+          .single();
+        if (unitDataForEmail) {
+          const property = unitDataForEmail.properties as { name?: string };
+          const propertyName = property?.name ?? "Your property";
+          supabase.functions.invoke("send-notification-email", {
+            body: {
+              type: "unit_assigned",
+              tenant_id: updateData.tenant_id,
+              data: {
+                property_name: propertyName,
+                unit_number: unit.unit_number,
+              },
+            },
+          }).catch(console.error);
+          // In-app notification for bell dropdown
+          supabase
+            .from("tenant_notifications")
+            .insert({
+              tenant_id: updateData.tenant_id,
+              type: "unit_assigned",
+              title: "You've been assigned to a unit",
+              message: `You have been assigned to ${propertyName}${unit.unit_number ? `, Unit ${unit.unit_number}` : ""}. View your dashboard for details.`,
+              metadata: { property_name: propertyName, unit_number: unit.unit_number },
+            })
+            .then(({ error }) => {
+              if (error) console.warn("Failed to insert tenant notification:", error);
+            });
         }
       }
       
@@ -533,6 +622,13 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
             </SheetHeader>
 
             <div className="mt-6 space-y-5 pb-6 flex-1 overflow-y-auto">
+            {/* Banner when unit has broken tenant link (tenant signed up, old profile deleted) */}
+            {unit.tenant_id && !tenants.some((t) => t.id === unit.tenant_id) && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/50 p-3 text-sm">
+                <p className="font-medium text-amber-800 dark:text-amber-200">Tenant can&apos;t see this unit</p>
+                <p className="mt-1 text-amber-700 dark:text-amber-300">Select the tenant below and click <strong>Sync tenant link</strong> so they can see this unit. You don&apos;t need to click Save.</p>
+              </div>
+            )}
             {/* Assign Tenant */}
             <div className="space-y-2">
               <Label>Assign Tenant (optional)</Label>
@@ -623,6 +719,20 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                   </Command>
                 </PopoverContent>
               </Popover>
+              {formData.tenant_id && formData.tenant_id !== "__none__" && (
+                <div className="pt-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={syncingTenantLink}
+                    onClick={handleSyncTenantLink}
+                  >
+                    {syncingTenantLink ? "Syncing…" : "Sync tenant link (if tenant can't see unit)"}
+                  </Button>
+                </div>
+              )}
               {/* Move In Date - only show when tenant is assigned */}
               {formData.tenant_id && formData.tenant_id !== "__none__" && (
                 <div className="grid gap-2 pt-2">
@@ -653,7 +763,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                   </Label>
                 </div>
               )}
-              {/* Pro-rated Rent Display - only show when tenant is assigned, move-in date is set, and not first of month */}
+              {/* Pro-rated Rent Display - only show when tenant is assigned, move-in date is set */}
               {formData.tenant_id && formData.tenant_id !== "__none__" && formData.move_in_date && formData.monthly_rent > 0 && (
                 (() => {
                   const calculateProratedRent = (moveInDate: string, monthlyRent: number): number | null => {
@@ -673,7 +783,12 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                   };
                   
                   const prorated = calculateProratedRent(formData.move_in_date, formData.monthly_rent);
-                  if (prorated === null) return null;
+                  const firstMonthPaid = formData.first_month_paid === true;
+                  if (!firstMonthPaid && prorated === null) return null;
+                  const displayAmount = firstMonthPaid ? 0 : (prorated ?? 0);
+                  const displayMessage = firstMonthPaid
+                    ? "First month paid - no charge for the move-in month."
+                    : "This amount will be charged for the move-in month only.";
                   return (
                     <div className="bg-muted/50 p-3 rounded-lg mt-2">
                       <p className="text-sm font-medium text-foreground mb-1">Pro-rated Rent for Move-In Month</p>
@@ -681,10 +796,10 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                         Monthly Rent: ${formData.monthly_rent.toFixed(2)}
                       </p>
                       <p className="text-lg font-semibold text-primary">
-                        Pro-rated Amount: ${prorated.toFixed(2)}
+                        Pro-rated Amount: ${displayAmount.toFixed(2)}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        This amount will be charged for the move-in month only.
+                        {displayMessage}
                       </p>
                     </div>
                   );

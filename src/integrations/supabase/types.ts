@@ -25,6 +25,7 @@ export type Database = {
           paid_at: string | null
           payment_method: string
           statement_id: string | null
+          statement_amount: number | null
           status: string
           stripe_payment_id: string | null
           unit_id: string
@@ -39,6 +40,7 @@ export type Database = {
           paid_at?: string | null
           payment_method: string
           statement_id?: string | null
+          statement_amount?: number | null
           status?: string
           stripe_payment_id?: string | null
           unit_id: string
@@ -53,6 +55,7 @@ export type Database = {
           paid_at?: string | null
           payment_method?: string
           statement_id?: string | null
+          statement_amount?: number | null
           status?: string
           stripe_payment_id?: string | null
           unit_id?: string
@@ -249,11 +252,193 @@ export type Database = {
           },
         ]
       }
+      categories: {
+        Row: {
+          id: string
+          landlord_id: string | null
+          name: string
+          type: string
+          is_system: boolean
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          landlord_id?: string | null
+          name: string
+          type: string
+          is_system?: boolean
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          landlord_id?: string | null
+          name?: string
+          type?: string
+          is_system?: boolean
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "categories_landlord_id_fkey"
+            columns: ["landlord_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      expenses: {
+        Row: {
+          id: string
+          landlord_id: string
+          property_id: string
+          unit_id: string | null
+          amount: number
+          expense_date: string
+          category_id: string
+          description: string | null
+          receipt_url: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          landlord_id: string
+          property_id: string
+          unit_id?: string | null
+          amount: number
+          expense_date: string
+          category_id: string
+          description?: string | null
+          receipt_url?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          landlord_id?: string
+          property_id?: string
+          unit_id?: string | null
+          amount?: number
+          expense_date?: string
+          category_id?: string
+          description?: string | null
+          receipt_url?: string | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "expenses_landlord_id_fkey"
+            columns: ["landlord_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expenses_property_id_fkey"
+            columns: ["property_id"]
+            isOneToOne: false
+            referencedRelation: "properties"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expenses_unit_id_fkey"
+            columns: ["unit_id"]
+            isOneToOne: false
+            referencedRelation: "units"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expenses_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      payouts: {
+        Row: {
+          id: string
+          landlord_id: string
+          amount: number
+          payout_date: string
+          stripe_payout_id: string | null
+          status: string
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          landlord_id: string
+          amount: number
+          payout_date: string
+          stripe_payout_id?: string | null
+          status?: string
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          landlord_id?: string
+          amount?: number
+          payout_date?: string
+          stripe_payout_id?: string | null
+          status?: string
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payouts_landlord_id_fkey"
+            columns: ["landlord_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      tenant_notifications: {
+        Row: {
+          id: string
+          tenant_id: string
+          type: string
+          title: string
+          message: string
+          metadata: Json | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          tenant_id: string
+          type?: string
+          title: string
+          message: string
+          metadata?: Json | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          tenant_id?: string
+          type?: string
+          title?: string
+          message?: string
+          metadata?: Json | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_notifications_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      fix_tenant_unit_assignment_by_email: { Args: never; Returns: string | null }
+      tenant_claim_profile_by_email: { Args: { p_email: string }; Returns: boolean }
+      sync_unit_tenant_to_profile_by_email: { Args: { p_unit_id: string; p_tenant_email?: string | null; p_tenant_id?: string | null }; Returns: boolean }
       is_admin: { Args: never; Returns: boolean }
       landlord_owns_unit: { Args: { unit_id_text: string }; Returns: boolean }
       tenant_assigned_to_unit: {
@@ -263,6 +448,33 @@ export type Database = {
       tenant_has_access_to_property: {
         Args: { property_id: string }
         Returns: boolean
+      }
+      get_ledger_entries: {
+        Args: {
+          p_landlord_id: string
+          p_date_from?: string | null
+          p_date_to?: string | null
+          p_property_id?: string | null
+          p_unit_id?: string | null
+          p_entry_types?: string[] | null
+        }
+        Returns: {
+          entry_type: string
+          entry_date: string
+          amount: number
+          category_id: string | null
+          category_name: string | null
+          property_id: string | null
+          property_name: string | null
+          unit_id: string | null
+          unit_number: string | null
+          tenant_id: string | null
+          tenant_name: string | null
+          description: string | null
+          reference_id: string
+          reference_type: string
+          created_at: string | null
+        }[]
       }
     }
     Enums: {

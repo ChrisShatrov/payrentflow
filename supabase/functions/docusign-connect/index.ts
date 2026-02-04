@@ -51,6 +51,13 @@ serve(async (req) => {
       );
     }
 
+    let body: { redirect_uri?: string } = {};
+    try {
+      body = req.method === "POST" && req.body ? await req.json() : {};
+    } catch {
+      // ignore
+    }
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const supabase = createClient(supabaseUrl, supabaseKey, {
@@ -83,7 +90,8 @@ serve(async (req) => {
     const integrationKey = Deno.env.get("DOCUSIGN_INTEGRATION_KEY");
     const secretKey = Deno.env.get("DOCUSIGN_SECRET_KEY");
     const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
-    const redirectUri = Deno.env.get("DOCUSIGN_REDIRECT_URI") || 
+    // Use frontend URL as redirect so DocuSign redirects to the app; the app then calls docusign-callback with auth
+    const redirectUri = body.redirect_uri || Deno.env.get("DOCUSIGN_REDIRECT_URI") || 
       `${supabaseUrl.replace('/rest/v1', '')}/functions/v1/docusign-callback`;
 
     console.log("DocuSign configuration check:", {

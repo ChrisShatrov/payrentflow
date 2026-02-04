@@ -23,6 +23,7 @@ const AdminLeaseTemplates = lazy(() => import("./pages/admin/AdminLeaseTemplates
 const AdminLeases = lazy(() => import("./pages/admin/AdminLeases"));
 const AdminPayments = lazy(() => import("./pages/admin/AdminPayments"));
 const AdminStatements = lazy(() => import("./pages/admin/AdminStatements"));
+const AdminReports = lazy(() => import("./pages/admin/AdminReports"));
 const AdminSettings = lazy(() => import("./pages/admin/AdminSettings"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
 const TenantStatements = lazy(() => import("./pages/tenant/TenantStatements"));
@@ -276,6 +277,11 @@ const AppRoutes = () => {
         <Route path="/admin/statements" element={
           <ProtectedRoute allowedRoles={["admin"]}>
             <AdminStatements />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/reports" element={
+          <ProtectedRoute allowedRoles={["admin"]}>
+            <AdminReports />
           </ProtectedRoute>
         } />
         <Route path="/admin/settings" element={

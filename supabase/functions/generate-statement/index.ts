@@ -296,6 +296,26 @@ serve(async (req) => {
       }
     }
 
+    // For new statements (insert path), enforce 5-day rule: do not create until 5 days before due date (move-in month is exempt)
+    if (!existingStatement && !isMoveInMonth) {
+      const fiveDaysBeforeDue = new Date(dueDate);
+      fiveDaysBeforeDue.setDate(fiveDaysBeforeDue.getDate() - 5);
+      fiveDaysBeforeDue.setHours(0, 0, 0, 0);
+      if (today < fiveDaysBeforeDue) {
+        console.log(`Skipping statement generation for unit ${unit_id} - period ${period_month} is not yet within 5 days of due date (${dueDate.toISOString()})`);
+        return new Response(
+          JSON.stringify({
+            error: 'Statement is generated 5 days before due date',
+            skipped: true,
+            reason: 'Statement is generated 5 days before due date',
+            period_month,
+            due_date: dueDate.toISOString()
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     // Calculate past due balance (unpaid/overdue statements before this period)
     const { data: pastDueStatements } = await supabaseClient
       .from('statements')

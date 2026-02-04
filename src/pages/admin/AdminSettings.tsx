@@ -38,20 +38,50 @@ export default function AdminSettings() {
       fetchProfile();
       setEmail(user.email || "");
     }
-    
-    // Check for DocuSign connection status in URL params
+  }, [user]);
+
+  // Handle DocuSign OAuth callback: DocuSign redirects here with ?code=...&state=...
+  useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get("code");
+    const state = urlParams.get("state");
+
     if (urlParams.get("docusign_connected") === "true") {
       toast.success("DocuSign connected successfully!");
-      // Clean up URL
       window.history.replaceState({}, "", window.location.pathname);
-    } else if (urlParams.get("docusign_error")) {
+      return;
+    }
+    if (urlParams.get("docusign_error")) {
       const error = urlParams.get("docusign_error");
       toast.error(`DocuSign connection failed: ${error}`);
-      // Clean up URL
       window.history.replaceState({}, "", window.location.pathname);
+      return;
     }
-  }, [user]);
+
+    if (code && state) {
+      const redirectUri = `${window.location.origin}/admin/settings`;
+      supabase.functions
+        .invoke("docusign-callback", {
+          body: { code, state, redirect_uri: redirectUri },
+        })
+        .then(({ data, error: fnError }) => {
+          window.history.replaceState({}, "", window.location.pathname);
+          if (fnError) {
+            toast.error(`DocuSign connection failed: ${fnError.message}`);
+            return;
+          }
+          if (data?.success) {
+            toast.success("DocuSign connected successfully!");
+          } else if (data?.error) {
+            toast.error(`DocuSign connection failed: ${data.error}`);
+          }
+        })
+        .catch((err) => {
+          window.history.replaceState({}, "", window.location.pathname);
+          toast.error(`DocuSign connection failed: ${err?.message || "Unknown error"}`);
+        });
+    }
+  }, []);
 
   const fetchProfile = async () => {
     try {

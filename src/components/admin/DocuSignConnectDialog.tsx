@@ -22,22 +22,8 @@ export function DocuSignConnectDialog() {
   useEffect(() => {
     if (open) {
       checkConnection();
-      // Get the redirect URI from environment variable
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
-      if (supabaseUrl) {
-        const baseUrl = supabaseUrl.replace('/rest/v1', '');
-        setRedirectUri(`${baseUrl}/functions/v1/docusign-callback`);
-      } else {
-        // Fallback: construct from current hostname if on Supabase
-        const host = window.location.hostname;
-        if (host.includes('supabase.co')) {
-          const projectRef = host.split('.')[0];
-          setRedirectUri(`https://${projectRef}.supabase.co/functions/v1/docusign-callback`);
-        } else {
-          // Show placeholder with instructions
-          setRedirectUri('https://your-project.supabase.co/functions/v1/docusign-callback');
-        }
-      }
+      // DocuSign must redirect to the frontend; the frontend then calls the callback function with auth
+      setRedirectUri(`${window.location.origin}/admin/settings`);
     }
   }, [open]);
 
@@ -65,7 +51,10 @@ export function DocuSignConnectDialog() {
   const handleConnect = async () => {
     setConnecting(true);
     try {
-      const { data, error } = await supabase.functions.invoke("docusign-connect");
+      const redirectUriForOAuth = `${window.location.origin}/admin/settings`;
+      const { data, error } = await supabase.functions.invoke("docusign-connect", {
+        body: { redirect_uri: redirectUriForOAuth },
+      });
 
       if (error) {
         console.error("DocuSign connect error:", error);
@@ -171,7 +160,7 @@ export function DocuSignConnectDialog() {
                       Important: Register Redirect URI in DocuSign First
                     </p>
                     <p className="text-xs text-amber-800 dark:text-amber-200 mb-2">
-                      Before clicking "Connect DocuSign", you must add this exact redirect URI to your DocuSign Integration:
+                      Before clicking "Connect DocuSign", add this exact redirect URI in your DocuSign app (Developer Center → your app → Redirect URIs). DocuSign will redirect here after you authorize.
                     </p>
                     <div className="bg-white dark:bg-gray-900 p-3 rounded border border-amber-300 dark:border-amber-700">
                       <code className="text-xs break-all text-amber-900 dark:text-amber-100">

@@ -3,6 +3,7 @@ import { AdminLayout } from "@/components/admin/AdminLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Plus, FileText, Download, Eye, Send, Trash2 } from "lucide-react";
+import { PdfViewerModal, type PdfViewerSource } from "@/components/shared/PdfViewerModal";
 import { toast } from "sonner";
 import { CreateLeaseWizard } from "@/components/admin/CreateLeaseWizard";
 import { LeasePreviewModal } from "@/components/admin/LeasePreviewModal";
@@ -124,6 +125,38 @@ export default function AdminLeases() {
       fetchLeases();
     } catch (error: any) {
       toast.error(error.message || "Failed to send lease for signature");
+    }
+  };
+
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfViewerSource, setPdfViewerSource] = useState<PdfViewerSource | null>(null);
+  const [pdfViewerTitle, setPdfViewerTitle] = useState("Lease");
+
+  const handleViewLease = async (lease: Lease, type: "draft" | "signed") => {
+    try {
+      const url = type === "draft" ? lease.pdf_draft_url : lease.pdf_signed_url;
+      if (!url) {
+        toast.error(`${type === "draft" ? "Draft" : "Signed"} PDF not available`);
+        return;
+      }
+      let blob: Blob;
+      if (url.startsWith("http")) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        blob = await res.blob();
+      } else {
+        const { data, error } = await supabase.storage.from("leases").download(url);
+        if (error || !data) {
+          toast.error(error?.message ?? "Failed to load PDF");
+          return;
+        }
+        blob = data;
+      }
+      setPdfViewerSource({ type: "blob", blob });
+      setPdfViewerTitle(`${type === "draft" ? "Draft" : "Signed"} lease – ${lease.units?.properties?.name ?? ""} Unit ${lease.units?.unit_number ?? ""}`);
+      setPdfViewerOpen(true);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Failed to load PDF");
     }
   };
 
@@ -299,24 +332,44 @@ export default function AdminLeases() {
                       Timeline
                     </Button>
                     {lease.pdf_draft_url && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDownload(lease, "draft")}
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Draft PDF
-                      </Button>
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleViewLease(lease, "draft")}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View draft
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDownload(lease, "draft")}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Draft PDF
+                        </Button>
+                      </>
                     )}
                     {lease.pdf_signed_url && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDownload(lease, "signed")}
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Signed PDF
-                      </Button>
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleViewLease(lease, "signed")}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View signed
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDownload(lease, "signed")}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Signed PDF
+                        </Button>
+                      </>
                     )}
                     {lease.status === "draft" && (
                       <Button
@@ -409,6 +462,14 @@ export default function AdminLeases() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <PdfViewerModal
+          open={pdfViewerOpen}
+          onOpenChange={setPdfViewerOpen}
+          source={pdfViewerSource}
+          title={pdfViewerTitle}
+          downloadFilename="lease.pdf"
+        />
       </div>
     </AdminLayout>
   );

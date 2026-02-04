@@ -1,5 +1,5 @@
 -- Schedule monthly statement generation using pg_cron
--- Runs daily at 2 AM UTC to check if statements need to be generated (10 days before due date)
+-- Runs daily at 2 AM UTC to check if statements need to be generated (5 days before due date)
 -- 
 -- IMPORTANT: This migration requires:
 -- 1. pg_cron extension to be enabled in Supabase (may need to enable in dashboard)

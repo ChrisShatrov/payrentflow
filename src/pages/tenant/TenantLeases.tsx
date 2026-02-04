@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { TenantLayout } from "@/components/tenant/TenantLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { FileText, Download, CheckCircle2, Clock } from "lucide-react";
+import { FileText, Download, CheckCircle2, Clock, Eye } from "lucide-react";
+import { PdfViewerModal, type PdfViewerSource } from "@/components/shared/PdfViewerModal";
 import { toast } from "sonner";
 import { LeaseSigningModal } from "@/components/tenant/LeaseSigningModal";
 import { LeaseStatusBadge } from "@/components/shared/LeaseStatusBadge";
@@ -32,6 +33,9 @@ export default function TenantLeases() {
   const [loading, setLoading] = useState(true);
   const [signingLease, setSigningLease] = useState<Lease | null>(null);
   const [signingModalOpen, setSigningModalOpen] = useState(false);
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfViewerSource, setPdfViewerSource] = useState<PdfViewerSource | null>(null);
+  const [pdfViewerTitle, setPdfViewerTitle] = useState("Lease");
 
   const fetchLeases = async () => {
     try {
@@ -76,6 +80,33 @@ export default function TenantLeases() {
     }
     setSigningLease(lease);
     setSigningModalOpen(true);
+  };
+
+  const handleViewLease = async (lease: Lease, type: "draft" | "signed") => {
+    try {
+      const url = type === "draft" ? lease.pdf_draft_url : lease.pdf_signed_url;
+      if (!url) {
+        toast.error(`${type === "draft" ? "Draft" : "Signed"} PDF not available`);
+        return;
+      }
+      if (url.startsWith("http")) {
+        setPdfViewerSource({ type: "url", url });
+      } else {
+        const { data } = await supabase.storage.from("leases").createSignedUrl(url, 3600);
+        if (data?.signedUrl) {
+          const res = await fetch(data.signedUrl);
+          const blob = await res.blob();
+          setPdfViewerSource({ type: "blob", blob });
+        } else {
+          toast.error("Failed to load PDF");
+          return;
+        }
+      }
+      setPdfViewerTitle(`${type === "draft" ? "Draft" : "Signed"} lease`);
+      setPdfViewerOpen(true);
+    } catch (error: any) {
+      toast.error("Failed to load PDF");
+    }
   };
 
   const handleDownload = async (lease: Lease, type: "draft" | "signed") => {
@@ -192,13 +223,22 @@ export default function TenantLeases() {
                         </div>
                         <div className="flex gap-2">
                           {lease.pdf_signed_url && (
-                            <Button
-                              variant="outline"
-                              onClick={() => handleDownload(lease, "signed")}
-                            >
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </Button>
+                            <>
+                              <Button
+                                variant="outline"
+                                onClick={() => handleViewLease(lease, "signed")}
+                              >
+                                <Eye className="h-4 w-4 mr-2" />
+                                View
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={() => handleDownload(lease, "signed")}
+                              >
+                                <Download className="h-4 w-4 mr-2" />
+                                Download
+                              </Button>
+                            </>
                           )}
                         </div>
                       </div>

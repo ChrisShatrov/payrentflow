@@ -142,7 +142,7 @@ export default function TenantDashboard() {
         .from("profiles")
         .select("full_name, email, id, role")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
       
       console.log("[TenantDashboard] Profile data:", { 
         profileData, 
@@ -153,9 +153,29 @@ export default function TenantDashboard() {
         errorHint: profileError?.hint
       });
       
-      // If profile fetch fails with 406 or RLS error, try using auth metadata
-      if (profileError && (profileError.code === 'PGRST301' || profileError.message?.includes('permission') || profileError.code === '406')) {
-        console.warn("[TenantDashboard] Profile fetch blocked by RLS, using auth metadata");
+      // If no profile row (0 rows from .maybeSingle() or PGRST116/406 from .single()), claim profile by email first (migrates existing profile to auth.uid())
+      const noProfileRow = !profileData && (profileError?.code === 'PGRST116' || profileError?.code === '406' || profileError?.message?.includes('0 rows') || !profileError);
+      if (noProfileRow && (user.email || authUserData?.email)) {
+        const tenantEmail = user.email || authUserData?.email || "";
+        console.log("[TenantDashboard] No profile row for auth.uid(), calling tenant_claim_profile_by_email for:", tenantEmail);
+        const { data: claimOk, error: claimErr } = await supabase.rpc("tenant_claim_profile_by_email", { p_email: tenantEmail });
+        if (claimErr) {
+          console.warn("[TenantDashboard] tenant_claim_profile_by_email error (run 'supabase db push' if this RPC is missing):", claimErr);
+        } else if (claimOk) {
+          const { data: claimedProfile, error: claimedErr } = await supabase
+            .from("profiles")
+            .select("full_name, email, id, role")
+            .eq("id", user.id)
+            .single();
+          if (claimedProfile && !claimedErr) {
+            profileData = claimedProfile;
+            setTenantProfile(claimedProfile);
+          }
+        }
+      }
+      
+      // If still no profile (0 rows or fetch error), use auth metadata for display so we don't try insert → 409
+      if (!profileData && (profileError?.code === 'PGRST301' || profileError?.code === 'PGRST116' || profileError?.message?.includes('permission') || profileError?.code === '406' || !profileError)) {
         if (authUserData) {
           profileData = {
             id: authUserData.id,
@@ -163,18 +183,17 @@ export default function TenantDashboard() {
             full_name: authUserData.user_metadata?.full_name || null,
             role: authUserData.user_metadata?.role || 'tenant'
           };
-          console.log("[TenantDashboard] Using auth metadata as profile:", profileData);
         }
       }
       
       // If no profile exists, try to create one from auth user data
       if (!profileData && user.email) {
-        console.log("[TenantDashboard] No profile found, attempting to create one from auth user data");
-        const { data: authUser } = await supabase.auth.getUser();
+          console.log("[TenantDashboard] No profile found, attempting to create one from auth user data");
+          const { data: authUser } = await supabase.auth.getUser();
         
-        if (authUser?.user) {
-          // First, try a simple insert (will fail if profile exists, which is fine)
-          const { data: newProfile, error: createError } = await supabase
+          if (authUser?.user) {
+            // First, try a simple insert (will fail if profile exists, which is fine)
+            const { data: newProfile, error: createError } = await supabase
             .from("profiles")
             .insert({
               id: user.id,
@@ -233,7 +252,7 @@ export default function TenantDashboard() {
         typeAuth: typeof authUser?.id
       });
       
-      const { data: unitData, error: unitError } = await supabase
+      const { data: unitDataRaw, error: unitError } = await supabase
         .from("units")
         .select(`
           id,
@@ -258,6 +277,8 @@ export default function TenantDashboard() {
         `)
         .eq("tenant_id", user.id)
         .maybeSingle();
+
+      let unitData = unitDataRaw;
 
       console.log("[TenantDashboard] Unit query result:", { 
         unitData, 
@@ -299,20 +320,8 @@ export default function TenantDashboard() {
         // 1. The tenant_id in units table doesn't match auth.uid()
         // 2. Or there's a profile/RLS issue preventing auth.uid() from working
         if (allUnitsError || (allUnits && allUnits.length === 0)) {
-          console.error("[TenantDashboard] ⚠️ RLS is blocking all unit access!");
-          console.error("[TenantDashboard] This suggests:");
-          console.error("  1. tenant_id in units table doesn't match auth.uid()");
-          console.error("  2. Or profile doesn't exist/RLS is blocking profile access");
-          console.error("[TenantDashboard] auth.uid() should be:", currentAuthUser?.id);
-          console.error("[TenantDashboard] Check units table - tenant_id should match:", currentAuthUser?.id);
-          console.error("[TenantDashboard] 🔧 FIX: Run the SQL script: scripts/fix-tenant-assignment.sql");
-          console.error("[TenantDashboard] 🔧 Or update units table: UPDATE units SET tenant_id = '", currentAuthUser?.id, "' WHERE unit_number = '003';");
-          
-          // Show user-friendly error
-          toast.error(
-            `Unit assignment mismatch detected. Your user ID (${currentAuthUser?.id?.substring(0, 8)}...) doesn't match the tenant_id in the database. Please contact support.`,
-            { duration: 10000 }
-          );
+          // No unit assigned yet is normal for new tenants; do not show error toast
+          console.log("[TenantDashboard] No unit found for this user (may be unassigned)");
         }
         
         // Check if any unit has our tenant_id (if we got any results)
@@ -354,7 +363,80 @@ export default function TenantDashboard() {
         setSignedLeaseId(null);
       }
 
-      // If no unit found, try to find by email as fallback
+      // If no unit found, try server-side fix: unit may be assigned to a profile with same email but different id (e.g. after invite)
+      if (!unitData) {
+        const { data: fixedUnitId, error: rpcError } = await supabase.rpc("fix_tenant_unit_assignment_by_email");
+        if (rpcError) {
+          console.warn("[TenantDashboard] fix_tenant_unit_assignment_by_email RPC error:", rpcError);
+          if (rpcError.message?.toLowerCase().includes("function") && rpcError.message?.toLowerCase().includes("does not exist")) {
+            toast.error("App update required. Please ask your landlord to deploy the latest database migration.");
+          }
+        } else if (fixedUnitId) {
+          const unitId = String(fixedUnitId);
+          const { data: fetchedUnit, error: fetchErr } = await supabase
+            .from("units")
+            .select(`
+              id,
+              unit_number,
+              monthly_rent,
+              due_day,
+              allow_split_payment,
+              split_payment_fee,
+              lease_pdf_url,
+              daily_late_fee,
+              late_fee_type,
+              late_fee_amount,
+              first_month_paid,
+              move_in_date,
+              tenant_id,
+              addons,
+              property:properties (
+                name,
+                address,
+                allow_maintenance_requests
+              )
+            `)
+            .eq("id", unitId)
+            .single();
+          if (!fetchErr && fetchedUnit) {
+            unitData = fetchedUnit;
+            console.log("[TenantDashboard] Unit resolved via fix_tenant_unit_assignment_by_email:", unitData.id);
+          } else {
+            // RPC updated tenant_id; retry primary query once in case fetch by id had a timing/RLS quirk
+            const { data: retryUnit } = await supabase
+              .from("units")
+              .select(`
+                id,
+                unit_number,
+                monthly_rent,
+                due_day,
+                allow_split_payment,
+                split_payment_fee,
+                lease_pdf_url,
+                daily_late_fee,
+                late_fee_type,
+                late_fee_amount,
+                first_month_paid,
+                move_in_date,
+                tenant_id,
+                addons,
+                property:properties (
+                  name,
+                  address,
+                  allow_maintenance_requests
+                )
+              `)
+              .eq("tenant_id", user.id)
+              .maybeSingle();
+            if (retryUnit) {
+              unitData = retryUnit;
+              console.log("[TenantDashboard] Unit found on retry after RPC fix:", unitData.id);
+            }
+          }
+        }
+      }
+
+      // If no unit found, try to find by email as fallback (client-side; RLS may still block)
       if (!unitData && profileData?.email) {
         console.log("[TenantDashboard] No unit found by tenant_id, trying email lookup:", profileData.email);
         // Try to find unit by matching tenant email in profiles
@@ -387,14 +469,8 @@ export default function TenantDashboard() {
         const matchingUnit = unitsByEmail?.find((u: any) => u.profiles?.email === profileData.email);
         if (matchingUnit) {
           console.log("[TenantDashboard] Found unit by email match:", matchingUnit);
-          // If found by email but tenant_id doesn't match, there's a data mismatch
           if (matchingUnit.tenant_id !== user.id) {
-            console.warn("[TenantDashboard] WARNING: Unit tenant_id doesn't match user ID!", {
-              unitTenantId: matchingUnit.tenant_id,
-              userId: user.id,
-              tenantEmail: profileData.email
-            });
-            toast.error("Unit assignment mismatch detected. Please contact support.");
+            console.warn("[TenantDashboard] Unit tenant_id doesn't match user ID (no toast shown)");
           }
         }
       }
@@ -502,11 +578,9 @@ export default function TenantDashboard() {
               const hasUnpaid = allStatements?.some(s => s.status !== "paid") || false;
               
               if (!hasUnpaid) {
-                // All statements are paid - check if we need to generate current month's statement
-                // This handles the case where January was just paid but no statement exists for current month yet
-                console.log("[TenantDashboard] All statements are paid, checking if current month statement needs to be generated");
+                // All statements are paid - statements are generated 5 days before due date by the system
+                console.log("[TenantDashboard] All statements are paid");
                 
-                // Check if current month statement exists
                 const { data: currentMonthCheck } = await supabase
                   .from("statements")
                   .select("id")
@@ -515,40 +589,9 @@ export default function TenantDashboard() {
                   .maybeSingle();
                 
                 if (!currentMonthCheck) {
-                  // Current month statement doesn't exist - generate it
-                  console.log("[TenantDashboard] Current month statement missing, generating it");
-                  try {
-                    const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
-                      body: { unit_id: unitData.id, period_month: currentMonth }
-                    });
-
-                    if (!generateError && generatedStatement) {
-                      // Fetch the newly created statement
-                      const { data: newStatement } = await supabase
-                        .from("statements")
-                        .select("*")
-                        .eq("unit_id", unitData.id)
-                        .eq("period_month", currentMonth)
-                        .maybeSingle();
-                      
-                      if (newStatement) {
-                        console.log("[TenantDashboard] Generated current month statement:", newStatement.id);
-                        setCurrentStatement(newStatement);
-                      } else {
-                        console.log("[TenantDashboard] Statement generation completed but not found");
-                        setCurrentStatement(null);
-                        setRemainingBalance(0);
-                      }
-                    } else {
-                      console.log("[TenantDashboard] Could not generate statement:", generateError);
-                      setCurrentStatement(null);
-                      setRemainingBalance(0);
-                    }
-                  } catch (error) {
-                    console.error("[TenantDashboard] Error generating statement:", error);
-                    setCurrentStatement(null);
-                    setRemainingBalance(0);
-                  }
+                  // No current month statement yet - leave balance at 0 until 5 days before due date
+                  setCurrentStatement(null);
+                  setRemainingBalance(0);
                 } else {
                   // Current month statement exists - check if it's actually paid
                   const { data: currentMonthStatement } = await supabase
@@ -566,13 +609,12 @@ export default function TenantDashboard() {
                       setRemainingBalance(0);
                     } else {
                       // Statement exists but is unpaid - set it as current statement
-                      // Calculate remaining balance immediately
+                      // Use base amount so UI adds calculated late fees (not stale total_due)
                       console.log("[TenantDashboard] Current month statement exists but is unpaid:", currentMonthStatement.status);
                       setCurrentStatement(currentMonthStatement);
-                      // Set initial balance from total_due (will be recalculated later with payments)
-                      const initialBalance = Number(currentMonthStatement.total_due) || 0;
-                      setRemainingBalance(initialBalance);
-                      console.log("[TenantDashboard] Set initial remaining balance:", initialBalance);
+                      const baseAmount = Number(currentMonthStatement.base_rent) + (Number(currentMonthStatement.additional_fees) || 0);
+                      setRemainingBalance(baseAmount);
+                      console.log("[TenantDashboard] Set initial remaining balance (base):", baseAmount);
                     }
                   } else {
                     // Statement check returned null somehow
@@ -636,10 +678,7 @@ export default function TenantDashboard() {
               // Statement is effectively paid (payments cover total), treat as paid
               console.log("[TenantDashboard] Statement is effectively paid, looking for next unpaid statement");
               
-              // Set remaining balance to 0 for this effectively paid statement
-              setRemainingBalance(0);
-              
-              // Find the next unpaid statement
+              // Find the next unpaid statement first; only set remainingBalance(0) when we have no statement to show
               const { data: unpaidStatements } = await supabase
                 .from("statements")
                 .select("*")
@@ -651,11 +690,11 @@ export default function TenantDashboard() {
               if (unpaidStatements && unpaidStatements.length > 0) {
                 console.log("[TenantDashboard] Found next unpaid statement:", unpaidStatements[0].period_month);
                 setCurrentStatement(unpaidStatements[0]);
+                setRemainingBalance(null); // Let useEffect set baseAmount + late fee
               } else {
-                // No unpaid statements - check if we need to generate current month's statement
-                console.log("[TenantDashboard] No unpaid statements found, checking if current month statement needs to be generated");
+                // No unpaid statements - statements are generated 5 days before due date
+                console.log("[TenantDashboard] No unpaid statements found");
                 
-                // Check if current month statement exists
                 const { data: currentMonthCheck } = await supabase
                   .from("statements")
                   .select("id")
@@ -664,42 +703,9 @@ export default function TenantDashboard() {
                   .maybeSingle();
                 
                 if (!currentMonthCheck) {
-                  // Current month statement doesn't exist - generate it
-                  console.log("[TenantDashboard] Current month statement missing, generating it");
-                  try {
-                    const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
-                      body: { unit_id: unitData.id, period_month: currentMonth }
-                    });
-
-                    if (!generateError && generatedStatement) {
-                      // Fetch the newly created statement
-                      const { data: newStatement } = await supabase
-                        .from("statements")
-                        .select("*")
-                        .eq("unit_id", unitData.id)
-                        .eq("period_month", currentMonth)
-                        .maybeSingle();
-                      
-                      if (newStatement) {
-                        console.log("[TenantDashboard] Generated current month statement:", newStatement.id);
-                        setCurrentStatement(newStatement);
-                      } else {
-                        console.log("[TenantDashboard] Statement generation completed but not found");
-                        setCurrentStatement(null);
-                        // remainingBalance is already set to 0 above
-                      }
-                    } else {
-                      console.log("[TenantDashboard] Could not generate statement:", generateError);
-                      setCurrentStatement(null);
-                      // remainingBalance is already set to 0 above
-                    }
-                  } catch (error) {
-                    console.error("[TenantDashboard] Error generating statement:", error);
-                    setCurrentStatement(null);
-                    // remainingBalance is already set to 0 above
-                  }
+                  setCurrentStatement(null);
+                  setRemainingBalance(0);
                 } else {
-                  // Current month statement exists - check if it's actually paid
                   const { data: currentMonthStatement } = await supabase
                     .from("statements")
                     .select("*")
@@ -709,25 +715,18 @@ export default function TenantDashboard() {
                   
                   if (currentMonthStatement) {
                     if (currentMonthStatement.status === "paid") {
-                      // Statement is paid - account is up to date
                       console.log("[TenantDashboard] Current month statement is paid, account is up to date");
                       setCurrentStatement(null);
-                      // remainingBalance is already set to 0 above
+                      setRemainingBalance(0);
                     } else {
-                      // Statement exists but is unpaid - set it as current statement
-                      // Calculate remaining balance immediately
                       console.log("[TenantDashboard] Current month statement exists but is unpaid:", currentMonthStatement.status);
                       setCurrentStatement(currentMonthStatement);
-                      // Set initial balance from total_due (will be recalculated later with payments)
-                      const initialBalance = Number(currentMonthStatement.total_due) || 0;
-                      setRemainingBalance(initialBalance);
-                      console.log("[TenantDashboard] Set initial remaining balance:", initialBalance);
+                      const baseAmount = Number(currentMonthStatement.base_rent) + (Number(currentMonthStatement.additional_fees) || 0);
+                      setRemainingBalance(baseAmount);
                     }
                   } else {
-                    // Statement check returned null somehow
-                    console.log("[TenantDashboard] Current month statement check returned null");
                     setCurrentStatement(null);
-                    // remainingBalance is already set to 0 above
+                    setRemainingBalance(0);
                   }
                 }
               }
@@ -744,68 +743,20 @@ export default function TenantDashboard() {
               console.log("[TenantDashboard] Statement not paid, set initial balance:", calculatedInitialBalance, "(stored total_due:", Number(currentMonthStatement.total_due) || 0, "includes stale late fee:", storedLateFee, ")");
             }
           } else {
-            // If no statement for current month, try to generate one
-            try {
-              const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
-                body: { unit_id: unitData.id, period_month: currentMonth }
-              });
-
-              if (!generateError && generatedStatement) {
-                // Fetch the newly created statement
-                const { data: newStatement } = await supabase
-                  .from("statements")
-                  .select("*")
-                  .eq("unit_id", unitData.id)
-                  .eq("period_month", currentMonth)
-                  .maybeSingle();
-                
-                if (newStatement) {
-                  setCurrentStatement(newStatement);
-                } else {
-                  // If generation failed or was skipped, check for any unpaid/overdue statement
-                  const { data: overdueStatement } = await supabase
-                    .from("statements")
-                    .select("*")
-                    .eq("unit_id", unitData.id)
-                    .in("status", ["unpaid", "overdue"])
-                    .order("created_at", { ascending: false })
-                    .limit(1)
-                    .maybeSingle();
-                  
-                  if (overdueStatement) {
-                    setCurrentStatement(overdueStatement);
-                  }
-                }
-              } else {
-                // Generation failed (might be first_month_paid), check for any unpaid/overdue statement
-                const { data: overdueStatement } = await supabase
-                  .from("statements")
-                  .select("*")
-                  .eq("unit_id", unitData.id)
-                  .in("status", ["unpaid", "overdue"])
-                  .order("created_at", { ascending: false })
-                  .limit(1)
-                  .maybeSingle();
-                
-                if (overdueStatement) {
-                  setCurrentStatement(overdueStatement);
-                }
-              }
-            } catch (error) {
-              console.error("Error generating statement:", error);
-              // Fallback: check for any unpaid/overdue statement
-              const { data: overdueStatement } = await supabase
-                .from("statements")
-                .select("*")
-                .eq("unit_id", unitData.id)
-                .in("status", ["unpaid", "overdue"])
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-              
-              if (overdueStatement) {
-                setCurrentStatement(overdueStatement);
-              }
+            // No statement for current month - statements are generated 5 days before due date
+            setCurrentStatement(null);
+            setRemainingBalance(0);
+            // Still show any unpaid/overdue statement from another period if one exists
+            const { data: overdueStatement } = await supabase
+              .from("statements")
+              .select("*")
+              .eq("unit_id", unitData.id)
+              .in("status", ["unpaid", "overdue"])
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (overdueStatement) {
+              setCurrentStatement(overdueStatement);
             }
           }
         } else {
@@ -831,10 +782,12 @@ export default function TenantDashboard() {
           if (nextMonthStatement) {
             console.log("[TenantDashboard] Found next month's statement:", nextMonthStr);
             setCurrentStatement(nextMonthStatement);
+            setRemainingBalance(null);
           } else {
             // No next month statement - statements will be auto-generated 10 days before due date
             console.log("[TenantDashboard] No next month statement found, waiting for auto-generation");
             setCurrentStatement(null);
+            setRemainingBalance(0);
           }
           
           // Explicitly do NOT show current month's statement, even if it exists
@@ -1158,7 +1111,7 @@ export default function TenantDashboard() {
             console.error("[TenantDashboard] WARNING: Units found but RLS might be blocking access!");
             toast.error("Unit found but access denied. Please refresh the page or contact support.");
           } else {
-            toast.error("No unit assigned. Please contact your landlord to assign you to a unit.");
+            toast.error("No unit assigned. If your landlord just assigned you to a unit, click Refresh above.");
           }
         } else {
           // Profile might be created by database trigger - don't show alarming error
@@ -1176,10 +1129,10 @@ export default function TenantDashboard() {
   }, [user]);
 
   useEffect(() => {
-    if (user) {
+    if (user?.id) {
       fetchTenantData();
     }
-  }, [user, fetchTenantData]);
+  }, [user?.id, fetchTenantData]);
 
   // Handle payment redirects from Stripe
   useEffect(() => {
@@ -1251,7 +1204,7 @@ export default function TenantDashboard() {
       searchParams.delete("payment");
       setSearchParams(searchParams, { replace: true });
     }
-  }, [searchParams, user, fetchTenantData]);
+  }, [searchParams, user?.id, fetchTenantData]);
 
   const getNextDueDate = () => {
     if (!unit) return null;
@@ -1405,9 +1358,9 @@ export default function TenantDashboard() {
   };
 
   const canMakePayment = () => {
-    // If no statement exists but unit exists, allow payment (will generate statement on click)
     if (!unit) return false;
-    if (!currentStatement) return true; // Allow payment to trigger statement generation
+    // Statements are generated 5 days before due date - nothing to pay until then
+    if (!currentStatement) return false;
     
     // Can always pay if past due
     if (isPastDue()) return true;
@@ -1417,14 +1370,14 @@ export default function TenantDashboard() {
       const nextDue = getNextDueDate();
       if (!nextDue) return false;
       const daysUntil = differenceInDays(nextDue, new Date());
-      return daysUntil <= 3; // Enable 3 days before due date
+      return daysUntil <= 5; // Enable 5 days before due date
     }
     
-    // For unpaid statements, check if within 3 days of due date
+    // For unpaid statements, check if within 5 days of due date
     const nextDue = getNextDueDate();
     if (!nextDue) return false;
     const daysUntil = differenceInDays(nextDue, new Date());
-    return daysUntil <= 3; // Enable 3 days before due date
+    return daysUntil <= 5; // Enable 5 days before due date
     // if (isMoveInMonth && unit.move_in_date) {
     //   // For move-in month: due date is move-in date (or today if already moved in)
     //   const moveInDate = startOfDay(new Date(unit.move_in_date));
@@ -1656,13 +1609,21 @@ export default function TenantDashboard() {
   return (
     <TenantLayout onOpenSettings={() => setSettingsModalOpen(true)}>
       <div className="space-y-8 animate-fade-in">
-        {/* Refresh button for debugging */}
+        {/* No unit assigned - show email so tenant can verify, and next steps */}
         {!unit && (
           <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg border border-border">
-            <div>
+            <div className="space-y-1">
               <p className="text-sm font-medium">No unit assigned</p>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground">
                 If your landlord just assigned you to a unit, try refreshing the page.
+              </p>
+              {(tenantProfile?.email || user?.email) && (
+                <p className="text-xs text-muted-foreground">
+                  You are logged in as <span className="font-medium text-foreground">{tenantProfile?.email || user?.email}</span>. Your landlord must assign this exact email to your unit.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                If it still does not appear, ask your landlord to open your unit, confirm you are selected, and click Save to re-sync your assignment.
               </p>
             </div>
             <Button 
@@ -1728,63 +1689,13 @@ export default function TenantDashboard() {
                   variant="outline" 
                   className="bg-primary-foreground text-primary hover:bg-primary-foreground/90 border-0"
                   onClick={async () => {
-                    // Always try to open payment modal if statement exists
                     if (currentStatement) {
                       setPaymentModalOpen(true);
                       return;
                     }
-                    
-                    // If no statement exists, try to generate one, but don't block the user
+                    // Statements are generated 5 days before due date - don't generate from the UI
                     if (unit) {
-                      const currentMonth = format(new Date(), "MM/yyyy");
-                      try {
-                        toast.loading("Generating statement...");
-                        const { data, error } = await supabase.functions.invoke("generate-statement", {
-                          body: { unit_id: unit.id, period_month: currentMonth }
-                        });
-                        toast.dismiss();
-                        
-                        if (error) {
-                          console.error("Error generating statement:", error);
-                          // Check if it's a skip error (move-in date issue)
-                          if (error.message?.includes("skipped") || error.message?.includes("move-in date")) {
-                            toast.error("Cannot generate statement yet. Please contact your landlord if you believe this is an error.");
-                          } else {
-                            toast.error(
-                              error.message || "Failed to generate statement. Please try again or contact support."
-                            );
-                          }
-                          return;
-                        }
-                        
-                        // Refresh data and then open payment modal
-                        await fetchTenantData();
-                        // Wait a moment for state to update, then check if statement exists
-                        // If data was returned from the function, statement was created
-                        if (data) {
-                          setPaymentModalOpen(true);
-                        } else {
-                          // Query directly to check if statement was created
-                          const { data: newStatement } = await supabase
-                            .from("statements")
-                            .select("*")
-                            .eq("unit_id", unit.id)
-                            .eq("period_month", currentMonth)
-                            .maybeSingle();
-                          
-                          if (newStatement) {
-                            setCurrentStatement(newStatement);
-                            setPaymentModalOpen(true);
-                          } else {
-                            toast.error("Statement generation completed but statement not found. Please refresh the page.");
-                          }
-                        }
-                      } catch (err) {
-                        toast.dismiss();
-                        console.error("Exception generating statement:", err);
-                        const errorMessage = err instanceof Error ? err.message : "Failed to generate statement";
-                        toast.error(`Error: ${errorMessage}. Please check your connection and try again.`);
-                      }
+                      toast.info("Rent will be available to pay 5 days before your due date.");
                     }
                   }}
                   disabled={!canPay || !unit || currentStatement?.status === "paid"}
@@ -2019,8 +1930,8 @@ export default function TenantDashboard() {
               </div>
             </div>
             <p className="text-sm text-muted-foreground mb-1">Properties</p>
-            <p className="text-2xl font-bold text-foreground">1</p>
-            <p className="text-xs text-muted-foreground mt-1">Active rental</p>
+            <p className="text-2xl font-bold text-foreground">{unit ? 1 : 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">{unit ? "Active rental" : "No rental"}</p>
           </Card>
         </div>
 

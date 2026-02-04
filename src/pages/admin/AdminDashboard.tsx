@@ -349,7 +349,7 @@ export default function AdminDashboard() {
     { title: "Add Property", icon: Building2, href: "/admin/properties" },
     { title: "Add Unit", icon: Home, href: "/admin/properties" },
     { title: "View Statements", icon: FileText, href: "/admin/statements" },
-    { title: "Settings", icon: Settings, href: "/admin" },
+    { title: "Settings", icon: Settings, href: "/admin/settings" },
   ];
 
   return (
@@ -384,7 +384,7 @@ export default function AdminDashboard() {
             href="/admin/tenants"
           />
           <StatsCard
-            title="Unpaid Statements"
+            title="Unpaid"
             value={loading ? "—" : stats.unpaidStatements}
             icon={AlertCircle}
             accentColor="warning"

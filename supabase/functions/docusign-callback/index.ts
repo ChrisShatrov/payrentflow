@@ -39,21 +39,44 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(
+      JSON.stringify({ code: 401, message: "Missing authorization header" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
   try {
-    const url = new URL(req.url);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    const error = url.searchParams.get("error");
+    let code: string | null = null;
+    let state: string | null = null;
+    let error: string | null = null;
+
+    let redirectUriFromBody: string | null = null;
+    if (req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      code = body.code ?? null;
+      state = body.state ?? null;
+      error = body.error ?? null;
+      redirectUriFromBody = body.redirect_uri ?? null;
+    } else {
+      const url = new URL(req.url);
+      code = url.searchParams.get("code");
+      state = url.searchParams.get("state");
+      error = url.searchParams.get("error");
+    }
 
     if (error) {
       console.error("DocuSign OAuth error:", error);
-      // Redirect to frontend with error
       const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
       return Response.redirect(`${frontendUrl}/admin/settings?docusign_error=${error}`);
     }
 
     if (!code || !state) {
-      return new Response("Missing code or state parameter", { status: 400 });
+      return new Response(JSON.stringify({ code: 400, message: "Missing code or state parameter" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Extract user ID from state (format: "state:userId")
@@ -65,7 +88,8 @@ serve(async (req) => {
     const integrationKey = Deno.env.get("DOCUSIGN_INTEGRATION_KEY");
     const secretKey = Deno.env.get("DOCUSIGN_SECRET_KEY");
     const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
-    const redirectUri = Deno.env.get("DOCUSIGN_REDIRECT_URI") || 
+    // Must match the redirect_uri used in the auth request (frontend URL when using frontend redirect flow)
+    const redirectUri = redirectUriFromBody || Deno.env.get("DOCUSIGN_REDIRECT_URI") || 
       `${Deno.env.get("SUPABASE_URL")?.replace('/rest/v1', '')}/functions/v1/docusign-callback`;
     const encryptionKey = Deno.env.get("ENCRYPTION_KEY") || integrationKey || "default-key-change-in-production";
 
@@ -73,7 +97,7 @@ serve(async (req) => {
       return new Response("DocuSign credentials not configured", { status: 500 });
     }
 
-    // Exchange code for tokens
+    // Exchange code for tokens (DocuSign requires client_id and client_secret)
     const tokenUrl = `${baseUrl}/oauth/token`;
     const tokenResponse = await fetch(tokenUrl, {
       method: "POST",
@@ -84,12 +108,20 @@ serve(async (req) => {
         grant_type: "authorization_code",
         code: code,
         redirect_uri: redirectUri,
+        client_id: integrationKey,
+        client_secret: secretKey,
       }),
     });
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error("Token exchange failed:", errorText);
+      if (req.method === "POST") {
+        return new Response(JSON.stringify({ success: false, error: "token_exchange_failed" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
       return Response.redirect(`${frontendUrl}/admin/settings?docusign_error=token_exchange_failed`);
     }
@@ -106,6 +138,12 @@ serve(async (req) => {
 
     if (!userInfoResponse.ok) {
       console.error("Failed to get user info");
+      if (req.method === "POST") {
+        return new Response(JSON.stringify({ success: false, error: "user_info_failed" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
       return Response.redirect(`${frontendUrl}/admin/settings?docusign_error=user_info_failed`);
     }
@@ -116,6 +154,12 @@ serve(async (req) => {
 
     if (!accountId) {
       console.error("No account ID found");
+      if (req.method === "POST") {
+        return new Response(JSON.stringify({ success: false, error: "no_account_id" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
       return Response.redirect(`${frontendUrl}/admin/settings?docusign_error=no_account_id`);
     }
@@ -148,15 +192,32 @@ serve(async (req) => {
 
     if (dbError) {
       console.error("Database error:", dbError);
+      if (req.method === "POST") {
+        return new Response(JSON.stringify({ success: false, error: "database_error" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
       return Response.redirect(`${frontendUrl}/admin/settings?docusign_error=database_error`);
     }
 
-    // Redirect to frontend with success
+    if (req.method === "POST") {
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
     return Response.redirect(`${frontendUrl}/admin/settings?docusign_connected=true`);
   } catch (error: any) {
     console.error("Error in DocuSign callback:", error);
+    if (req.method === "POST") {
+      return new Response(JSON.stringify({ success: false, error: error.message }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
     return Response.redirect(`${frontendUrl}/admin/settings?docusign_error=${encodeURIComponent(error.message)}`);
   }

@@ -37,7 +37,7 @@ export default function Terms() {
             <div className="bg-card border border-border rounded-xl p-8 md:p-12">
               <h1 className="text-4xl font-bold mb-4">Terms of Use</h1>
               <p className="text-muted-foreground mb-8">
-                Last updated: January 20, 2026
+                Last updated: February 3, 2026
               </p>
 
               <div className="prose prose-slate max-w-none dark:prose-invert">
@@ -267,6 +267,18 @@ export default function Terms() {
                   signatures), and Resend (email delivery). Your use of these services is subject to their respective 
                   terms of service and privacy policies. We are not responsible for the availability, accuracy, or 
                   practices of third-party services.
+                </p>
+
+                <h3 className="text-xl font-semibold mt-6 mb-3">12.1 Electronic Signatures (DocuSign)</h3>
+                <p>
+                  Lease agreement signing is powered by DocuSign, Inc. When you connect your DocuSign account to RentFlow, 
+                  send a document for signature, or sign a document through our platform, you are also subject to 
+                  DocuSign's Terms of Service and Privacy Policy. By using our electronic signature features, you 
+                  acknowledge that document content, signer names, email addresses, and related data will be processed 
+                  by DocuSign to provide the service. We are not responsible for DocuSign's services, availability, 
+                  security, or data practices. DocuSign's terms and policies are available at{" "}
+                  <a href="https://www.docusign.com/company/terms-and-conditions" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">docusign.com/company/terms-and-conditions</a> and{" "}
+                  <a href="https://www.docusign.com/company/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">docusign.com/company/privacy-policy</a>.
                 </p>
 
                 <h2 className="text-2xl font-semibold mt-8 mb-4">13. Changes to Terms</h2>

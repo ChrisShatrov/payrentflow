@@ -37,7 +37,7 @@ export default function Privacy() {
             <div className="bg-card border border-border rounded-xl p-8 md:p-12">
               <h1 className="text-4xl font-bold mb-4">Privacy Policy</h1>
               <p className="text-muted-foreground mb-8">
-                Last updated: January 20, 2026
+                Last updated: February 3, 2026
               </p>
 
               <div className="prose prose-slate max-w-none dark:prose-invert">
@@ -56,6 +56,7 @@ export default function Privacy() {
                   <li>Tenant and landlord relationship information</li>
                   <li>Payment information (processed securely through Stripe)</li>
                   <li>Lease agreement documents and related information</li>
+                  <li>Information used for electronic signatures (e.g., name, email, IP address) when you sign or send documents via DocuSign</li>
                 </ul>
 
                 <h3 className="text-xl font-semibold mt-6 mb-3">1.2 Payment Information</h3>
@@ -94,7 +95,7 @@ export default function Privacy() {
                 <p>We share information with trusted third-party service providers who assist us in operating our platform:</p>
                 <ul className="list-disc pl-6 space-y-2 my-4">
                   <li><strong>Stripe:</strong> Payment processing and financial transactions</li>
-                  <li><strong>DocuSign:</strong> Electronic signature services for lease agreements</li>
+                  <li><strong>DocuSign:</strong> Electronic signature services for lease agreements. When you connect a DocuSign account, send a document for signature, or sign a document, we share signer names, email addresses, document content, and related data with DocuSign so they can provide e-signature services. DocuSign's use of this information is governed by their Privacy Policy.</li>
                   <li><strong>Resend:</strong> Email delivery and notifications</li>
                   <li><strong>Supabase:</strong> Cloud infrastructure and database hosting</li>
                 </ul>
@@ -185,7 +186,7 @@ export default function Privacy() {
                 <p>Our platform integrates with the following third-party services:</p>
                 <ul className="list-disc pl-6 space-y-2 my-4">
                   <li><strong>Stripe:</strong> Payment processing. See Stripe's privacy policy at <a href="https://stripe.com/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">stripe.com/privacy</a></li>
-                  <li><strong>DocuSign:</strong> Electronic signatures. See DocuSign's privacy policy at <a href="https://www.docusign.com/company/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">docusign.com/privacy-policy</a></li>
+                  <li><strong>DocuSign:</strong> Electronic signatures for lease agreements. When you use signing features, DocuSign may collect and process your name, email address, IP address, and document content as described in their privacy policy. DocuSign's terms of service and privacy policy apply to your use of their services. See <a href="https://www.docusign.com/company/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">docusign.com/company/privacy-policy</a> and <a href="https://www.docusign.com/company/terms-and-conditions" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">docusign.com/company/terms-and-conditions</a>.</li>
                   <li><strong>Resend:</strong> Email delivery. See Resend's privacy policy at <a href="https://resend.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">resend.com/legal/privacy-policy</a></li>
                 </ul>
                 <p>

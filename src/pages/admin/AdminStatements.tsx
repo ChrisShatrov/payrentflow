@@ -32,9 +32,11 @@ import {
   Search,
   Calendar,
   Building2,
-  DollarSign
+  DollarSign,
+  Eye
 } from "lucide-react";
 import { toast } from "sonner";
+import { PdfViewerModal, type PdfViewerSource } from "@/components/shared/PdfViewerModal";
 
 interface StatementData {
   id: string;
@@ -78,6 +80,9 @@ export default function AdminStatements() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+  const [pdfViewerSource, setPdfViewerSource] = useState<PdfViewerSource | null>(null);
+  const [pdfViewerTitle, setPdfViewerTitle] = useState("Statement");
   
   // Search and filter states
   const [searchQuery, setSearchQuery] = useState("");
@@ -514,14 +519,30 @@ export default function AdminStatements() {
                               <Loader2 className="h-4 w-4 animate-spin" />
                             </Button>
                           ) : statement.pdf_url ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-primary hover:text-primary"
-                              onClick={() => window.open(statement.pdf_url!, "_blank")}
-                            >
-                              <FileDown className="h-4 w-4" />
-                            </Button>
+                            <div className="flex items-center justify-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-primary hover:text-primary"
+                                onClick={() => {
+                                  setPdfViewerSource({ type: "url", url: statement.pdf_url! });
+                                  setPdfViewerTitle(`Statement – ${statement.property_name} Unit ${statement.unit_number} ${statement.period_month}`);
+                                  setPdfViewerOpen(true);
+                                }}
+                                title="View PDF"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-primary hover:text-primary"
+                                onClick={() => window.open(statement.pdf_url!, "_blank")}
+                                title="Open in new tab"
+                              >
+                                <FileDown className="h-4 w-4" />
+                              </Button>
+                            </div>
                           ) : (
                             <Button
                               variant="outline"
@@ -720,6 +741,14 @@ export default function AdminStatements() {
           )}
         </div>
       </div>
+
+      <PdfViewerModal
+        open={pdfViewerOpen}
+        onOpenChange={setPdfViewerOpen}
+        source={pdfViewerSource}
+        title={pdfViewerTitle}
+        downloadFilename="statement.pdf"
+      />
     </AdminLayout>
   );
 }

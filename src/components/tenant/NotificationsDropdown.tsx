@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, AlertCircle, DollarSign, X, FileSignature, CalendarClock } from "lucide-react";
+import { Bell, AlertCircle, DollarSign, X, FileSignature, CalendarClock, Home } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -18,7 +18,7 @@ import { toast } from "sonner";
 
 interface Notification {
   id: string;
-  type: "overdue" | "late_fee" | "lease_sign" | "lease_expire";
+  type: "overdue" | "late_fee" | "lease_sign" | "lease_expire" | "unit_assigned";
   title: string;
   message: string;
   statementId?: string;
@@ -60,6 +60,25 @@ export function NotificationsDropdown() {
 
       const today = new Date();
 
+      // Fetch in-app tenant notifications (e.g. "You've been assigned to a unit")
+      const thirtyDaysAgo = new Date(today);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const { data: tenantNotificationRows } = await supabase
+        .from("tenant_notifications")
+        .select("id, type, title, message, created_at")
+        .eq("tenant_id", user.id)
+        .gte("created_at", thirtyDaysAgo.toISOString())
+        .order("created_at", { ascending: false });
+      const tenantNotificationItems: Notification[] = (tenantNotificationRows || [])
+        .filter((row: { id: string }) => !dismissedIds.has(`unit_assigned-${row.id}`))
+        .map((row: { id: string; type: string; title: string; message: string; created_at: string }) => ({
+          id: `unit_assigned-${row.id}`,
+          type: "unit_assigned" as const,
+          title: row.title,
+          message: row.message,
+          createdAt: row.created_at,
+        }));
+
       // Fetch tenant's unit
       const { data: unitData } = await supabase
         .from("units")
@@ -67,22 +86,39 @@ export function NotificationsDropdown() {
         .eq("tenant_id", user.id)
         .maybeSingle();
 
-      // Fetch leases for this tenant (any unit they're on)
-      const { data: tenantLeases } = await supabase
+      // Fetch leases for this tenant (use lease_data_json for end date; end_date column may not exist if migration not applied)
+      const { data: tenantLeases, error: leasesError } = await supabase
         .from("leases")
-        .select(`
-          id,
-          status,
-          end_date,
-          updated_at,
-          units!inner(unit_number, properties!inner(name))
-        `)
+        .select("id, status, updated_at, unit_id, lease_data_json")
         .eq("tenant_id", user.id)
         .order("updated_at", { ascending: false });
 
+      if (leasesError) {
+        console.warn("Leases fetch failed (notifications):", leasesError);
+      }
+
+      const unitIds = [...new Set((tenantLeases || []).map((l: { unit_id?: string }) => l.unit_id).filter(Boolean))] as string[];
+      const unitMap = new Map<string, { unit_number: string; propertyName: string }>();
+      if (unitIds.length > 0) {
+        const { data: unitsData } = await supabase
+          .from("units")
+          .select("id, unit_number, property_id")
+          .in("id", unitIds);
+        const propertyIds = [...new Set((unitsData || []).map((u: { property_id: string }) => u.property_id).filter(Boolean))] as string[];
+        const { data: propsData } = await supabase
+          .from("properties")
+          .select("id, name")
+          .in("id", propertyIds);
+        const propMap = new Map((propsData || []).map((p: { id: string; name: string }) => [p.id, p.name]));
+        (unitsData || []).forEach((u: { id: string; unit_number: string; property_id: string }) => {
+          unitMap.set(u.id, { unit_number: u.unit_number, propertyName: propMap.get(u.property_id) ?? "Property" });
+        });
+      }
+
       const leaseNotifications: Notification[] = [];
-      (tenantLeases || []).forEach((lease: any) => {
-        const props = lease.units?.properties ? { name: lease.units.properties.name, unit: lease.units.unit_number } : { name: "Property", unit: "" };
+      (tenantLeases || []).forEach((lease: { id: string; status: string; updated_at?: string; unit_id?: string; lease_data_json?: { lease_end_date?: string } }) => {
+        const u = lease.unit_id ? unitMap.get(lease.unit_id) : null;
+        const props = { name: u?.propertyName ?? "Property", unit: u?.unit_number ?? "" };
         if (lease.status === "sent" || lease.status === "delivered") {
           const notificationId = `lease-sign-${lease.id}`;
           if (!dismissedIds.has(notificationId)) {
@@ -96,8 +132,9 @@ export function NotificationsDropdown() {
             });
           }
         }
-        if (lease.status === "completed" && lease.end_date) {
-          const endDate = new Date(lease.end_date);
+        const endDateStr = lease.lease_data_json?.lease_end_date;
+        if (lease.status === "completed" && endDateStr) {
+          const endDate = new Date(endDateStr);
           const daysLeft = Math.ceil((endDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
           if (daysLeft > 0 && daysLeft <= 90) {
             const notificationId = `lease-expire-${lease.id}-${daysLeft <= 30 ? 30 : daysLeft <= 60 ? 60 : 90}`;
@@ -116,8 +153,9 @@ export function NotificationsDropdown() {
       });
 
       if (!unitData) {
-        // Still show lease notifications if tenant has leases
-        const sorted = [...leaseNotifications].sort((a, b) =>
+        // Still show lease and tenant_notifications (e.g. unit assigned) if no unit yet
+        const combined = [...tenantNotificationItems, ...leaseNotifications];
+        const sorted = combined.sort((a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
         setNotifications(sorted);
@@ -125,15 +163,15 @@ export function NotificationsDropdown() {
         return;
       }
 
-      // Fetch overdue and unpaid statements
+      // Fetch overdue, unpaid, and partial statements
       const { data: statements } = await supabase
         .from("statements")
         .select("*")
         .eq("unit_id", unitData.id)
-        .in("status", ["overdue", "unpaid"])
+        .in("status", ["overdue", "unpaid", "partial"])
         .order("period_month", { ascending: false });
 
-      const notificationList: Notification[] = [...leaseNotifications];
+      const notificationList: Notification[] = [...tenantNotificationItems, ...leaseNotifications];
       if (!statements) {
         notificationList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setNotifications(notificationList);
@@ -150,6 +188,11 @@ export function NotificationsDropdown() {
         if (isOverdue) {
           const notificationId = `overdue-${statement.id}`;
           if (!dismissedIds.has(notificationId)) {
+            // Use explicit sum so amount matches dashboard (base + late + additional + split)
+            const amountDue = Number(statement.base_rent || 0)
+              + Number(statement.late_fee || 0)
+              + Number(statement.additional_fees || 0)
+              + Number(statement.split_fee || 0);
             notificationList.push({
               id: notificationId,
               type: "overdue",
@@ -157,7 +200,7 @@ export function NotificationsDropdown() {
               message: `Your rent payment for ${format(new Date(year, month - 1), "MMMM yyyy")} is overdue. Please make a payment to avoid additional fees.`,
               statementId: statement.id,
               periodMonth: statement.period_month,
-              amount: statement.total_due,
+              amount: amountDue,
               createdAt: statement.created_at || new Date().toISOString(),
             });
           }
@@ -212,7 +255,9 @@ export function NotificationsDropdown() {
   };
 
   const handleNotificationClick = (notification: Notification) => {
-    if (notification.type === "lease_sign" || notification.type === "lease_expire") {
+    if (notification.type === "unit_assigned") {
+      navigate("/tenant");
+    } else if (notification.type === "lease_sign" || notification.type === "lease_expire") {
       navigate("/tenant/leases");
     } else {
       navigate("/tenant/statements");
@@ -337,7 +382,7 @@ export function NotificationsDropdown() {
                   <div className={`mt-0.5 rounded-full p-1.5 ${
                     notification.type === "overdue" 
                       ? "bg-destructive/10 text-destructive" 
-                      : notification.type === "lease_sign" || notification.type === "lease_expire"
+                      : notification.type === "lease_sign" || notification.type === "lease_expire" || notification.type === "unit_assigned"
                         ? "bg-primary/10 text-primary"
                         : "bg-amber-100 text-amber-600"
                   }`}>
@@ -347,6 +392,8 @@ export function NotificationsDropdown() {
                       <FileSignature className="h-4 w-4" />
                     ) : notification.type === "lease_expire" ? (
                       <CalendarClock className="h-4 w-4" />
+                    ) : notification.type === "unit_assigned" ? (
+                      <Home className="h-4 w-4" />
                     ) : (
                       <DollarSign className="h-4 w-4" />
                     )}
