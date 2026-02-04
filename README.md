@@ -204,7 +204,7 @@ STRIPE_SECRET_KEY_TEST=sk_test_your_test_key
 DOCUSIGN_INTEGRATION_KEY=your_integration_key
 DOCUSIGN_SECRET_KEY=your_secret_key
 DOCUSIGN_ACCOUNT_ID=your_account_id
-DOCUSIGN_BASE_URL=https://demo.docusign.net
+DOCUSIGN_BASE_URL=https://account-d.docusign.com
 DOCUSIGN_REDIRECT_URI=https://your-project.supabase.co/functions/v1/docusign-callback
 DOCUSIGN_WEBHOOK_SECRET=your_webhook_secret
 ```
@@ -223,11 +223,13 @@ BROWSERLESS_API_KEY=your_browserless_api_key
 
 ### 5. DocuSign Setup (Optional)
 
-1. Create a DocuSign Integration in the DocuSign Developer Center
-2. Set redirect URI: `https://your-project.supabase.co/functions/v1/docusign-callback`
-3. Enable scopes: `signature`, `impersonation`
-4. Set up Connect webhook: `https://your-project.supabase.co/functions/v1/docusign-webhook`
-5. Configure webhook events: `envelope-sent`, `envelope-delivered`, `envelope-signed`, `envelope-completed`, etc.
+**Important:** Integration keys can only be created in a **DocuSign Developer (demo)** account, not in production. See **[docs/DOCUSIGN_SETUP.md](docs/DOCUSIGN_SETUP.md)** for step-by-step testing instructions.
+
+1. Go to [developer.docusign.com](https://developer.docusign.com) (not production) → Apps and Keys → Add App and Integration Key.
+2. Copy Integration Key and Secret Key; add them as Supabase secrets: `DOCUSIGN_INTEGRATION_KEY`, `DOCUSIGN_SECRET_KEY`.
+3. Add redirect URI: `https://your-project-ref.supabase.co/functions/v1/docusign-callback` (must match exactly).
+4. Set `DOCUSIGN_BASE_URL=https://account-d.docusign.com` for demo.
+5. Optional: Set up Connect webhook for envelope events; see [docs/DOCUSIGN_SETUP.md](docs/DOCUSIGN_SETUP.md).
 
 ### 6. Resend Setup
 

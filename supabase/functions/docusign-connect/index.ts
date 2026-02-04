@@ -82,7 +82,7 @@ serve(async (req) => {
 
     const integrationKey = Deno.env.get("DOCUSIGN_INTEGRATION_KEY");
     const secretKey = Deno.env.get("DOCUSIGN_SECRET_KEY");
-    const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://demo.docusign.net";
+    const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
     const redirectUri = Deno.env.get("DOCUSIGN_REDIRECT_URI") || 
       `${supabaseUrl.replace('/rest/v1', '')}/functions/v1/docusign-callback`;
 

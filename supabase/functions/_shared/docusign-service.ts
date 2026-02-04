@@ -96,7 +96,7 @@ export async function getDocuSignTokens(
   if (needsRefresh) {
     // Refresh token
     const refreshToken = await decryptToken(integration.refresh_token_encrypted, encryptionKey);
-    const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://demo.docusign.net";
+    const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
     const integrationKey = Deno.env.get("DOCUSIGN_INTEGRATION_KEY");
     const secretKey = Deno.env.get("DOCUSIGN_SECRET_KEY");
 
@@ -202,7 +202,7 @@ export async function createEnvelope(
   emailBlurb?: string
 ): Promise<string> {
   const tokens = await getDocuSignTokens(supabase, landlordId);
-  const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://demo.docusign.net";
+  const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
 
   // Create envelope definition
   const envelopeDefinition = {
@@ -290,7 +290,7 @@ export async function getEmbeddedSigningUrl(
   returnUrl: string
 ): Promise<string> {
   const tokens = await getDocuSignTokens(supabase, landlordId);
-  const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://demo.docusign.net";
+  const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
 
   // Get recipient view token
   const viewRequest = {
@@ -329,7 +329,7 @@ export async function downloadCompletedDocument(
   envelopeId: string
 ): Promise<Uint8Array> {
   const tokens = await getDocuSignTokens(supabase, landlordId);
-  const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://demo.docusign.net";
+  const baseUrl = Deno.env.get("DOCUSIGN_BASE_URL") || "https://account-d.docusign.com";
 
   // Get document list
   const documentsResponse = await fetch(
