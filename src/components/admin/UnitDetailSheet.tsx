@@ -204,18 +204,19 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     if (!currentTenantId || currentTenantId === "__none__") {
       return "No tenant";
     }
-    const tenant = tenants.find((t) => t.id === currentTenantId);
+    const tenant = tenants.find((t) => String(t.id) === String(currentTenantId));
     if (!tenant) return "Select a tenant";
     return tenant.full_name 
       ? `${tenant.full_name} (${tenant.email})`
       : tenant.email;
   };
 
+  // Fetch tenants when sheet opens so the list is ready when user clicks Edit
   useEffect(() => {
-    if (isEditing && open && unit) {
+    if (open && unit) {
       fetchTenants();
     }
-  }, [isEditing, open, unit]);
+  }, [open, unit]);
 
   if (!unit) return null;
 
@@ -295,8 +296,8 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
     const unitAddons = (unit as any).addons || [];
     const parsedAddons = Array.isArray(unitAddons) ? unitAddons : [];
     
-    // Only keep unit.tenant_id in form if that profile still exists in tenants list (avoids dangling id after claim)
-    const tenantIdInList = unit.tenant_id && tenants.some((t) => t.id === unit.tenant_id);
+    // Keep unit.tenant_id in form if tenants not loaded yet or profile exists in list (clear only when loaded and id is dangling)
+    const tenantIdInList = !unit.tenant_id ? false : (tenants.length === 0 || tenants.some((t) => String(t.id) === String(unit.tenant_id)));
     const formTenantId = tenantIdInList ? unit.tenant_id : "";
     
     setFormData({
