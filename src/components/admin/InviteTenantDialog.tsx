@@ -223,7 +223,7 @@ export function InviteTenantDialog({ onTenantInvited }: InviteTenantDialogProps)
                       disabled={loading}
                     />
                     <p className="text-xs text-muted-foreground">
-                      The date when the tenant moves in. Used to calculate pro-rated rent for the first month.
+                      The date when the tenant moves in. Used to calculate pro-rated rent for the current prorated month.
                     </p>
                   </div>
                 )}

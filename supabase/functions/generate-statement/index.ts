@@ -227,38 +227,47 @@ serve(async (req) => {
       daysDifference: Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
     });
 
-    // Calculate late fees if overdue (applies to both move-in month and standard months)
-    // CRITICAL: Only calculate if today is AFTER the due date (not equal to)
-    // Validation: Never calculate late fees when today <= dueDate
-    if (today <= dueDate) {
+    // Calculate late fees if overdue. First month (move-in month): no late fees ever.
+    if (isMoveInMonth) {
+      lateFee = 0;
+      console.log(`No late fees - first month (move-in month) never charged late fees.`);
+    } else if (today <= dueDate) {
+      // Not yet due
       console.log(`No late fees - payment is not yet due. Today: ${today.toISOString()}, Due date: ${dueDate.toISOString()}`);
       lateFee = 0;
     } else {
-      const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-      console.log(`Calculating late fees - ${daysLate} days late. Due date: ${dueDate.toISOString()}, Today: ${today.toISOString()}`);
       const allowSplitPayment = Boolean(unit.allow_split_payment)
+      const statementMonthNum = parseInt(month)
+      const statementYearNum = parseInt(year)
+      const todayMonthNum = today.getMonth() + 1
+      const todayYearNum = today.getFullYear()
 
       if (allowSplitPayment) {
-        // Split payment logic: No fees if <= 30 days, fees if > 30 days
-        if (daysLate > 30) {
-          // One-time late fee (flat or percent) - only if > 30 days
+        // Split payment: no late fee during the statement's month; late fee from 1st of next month
+        const stillInStatementMonth = todayYearNum === statementYearNum && todayMonthNum === statementMonthNum
+        if (stillInStatementMonth) {
+          lateFee = 0
+          console.log(`No late fees (split payment) - still in statement month ${period_month}`);
+        } else if (todayYearNum < statementYearNum || (todayYearNum === statementYearNum && todayMonthNum < statementMonthNum)) {
+          lateFee = 0
+          console.log(`No late fees (split payment) - today is before statement month ${period_month}`);
+        } else {
+          // We're in a month after the statement month: late fee from 1st of next month
+          const lateFeeStartDate = new Date(statementYearNum, statementMonthNum, 1) // first day of month after statement
+          lateFeeStartDate.setHours(0, 0, 0, 0)
+          const daysLate = Math.floor((today.getTime() - lateFeeStartDate.getTime()) / (1000 * 60 * 60 * 24))
           if (unit.late_fee_type === 'flat') {
             lateFee = Number(unit.late_fee_amount)
           } else if (unit.late_fee_type === 'percent') {
             lateFee = (baseRent * Number(unit.late_fee_amount)) / 100
           }
-          
-          // Daily late fee - only applies starting from day 31 (so daysLate - 30)
-          const daysForDailyFee = Math.max(0, daysLate - 30)
-          const dailyFee = daysForDailyFee * Number(unit.daily_late_fee || 0)
-          lateFee += dailyFee
-          
-          console.log(`Applied late fee (split payment): ${lateFee} (one-time + ${daysForDailyFee} days of daily fee × $${unit.daily_late_fee}, starting from day 31)`);
-        } else {
-          // No late fees if <= 30 days and split payment is allowed
-          console.log(`No late fees (split payment allowed, ${daysLate} days late, <= 30 days)`);
+          const daysForDailyFee = Math.max(0, daysLate - 1)
+          lateFee += daysForDailyFee * Number(unit.daily_late_fee || 0)
+          console.log(`Applied late fee (split payment, from ${lateFeeStartDate.toISOString()}): ${lateFee} (flat + ${daysForDailyFee} days daily)`);
         }
       } else {
+        const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+        console.log(`Calculating late fees - ${daysLate} days late. Due date: ${dueDate.toISOString()}, Today: ${today.toISOString()}`);
         // Standard logic: charge fees immediately
         // One-time late fee
         if (unit.late_fee_type === 'flat') {
@@ -268,7 +277,6 @@ serve(async (req) => {
         }
         
         // Daily late fee (only applies starting from day 2)
-        // Daily fee only applies for days after the first day (so daysLate - 1)
         const daysForDailyFee = Math.max(0, daysLate - 1)
         const dailyFee = daysForDailyFee * Number(unit.daily_late_fee || 0)
         lateFee += dailyFee
@@ -281,19 +289,6 @@ serve(async (req) => {
     if (today <= dueDate && lateFee > 0) {
       console.warn(`WARNING: Late fee calculated as ${lateFee} but today (${today.toISOString()}) is not past due date (${dueDate.toISOString()}). Setting to 0.`);
       lateFee = 0;
-    }
-    
-    // Extra validation: If today equals move-in date, late fee must be 0
-    // This ensures late fees are never applied on the move-in date itself
-    if (isMoveInMonth && moveInDateObj) {
-      const moveInDateStart = new Date(moveInDateObj);
-      moveInDateStart.setHours(0, 0, 0, 0);
-      
-      if (today.getTime() === moveInDateStart.getTime()) {
-        // Today is the move-in date - no late fees should apply
-        console.log(`Today is move-in date (${moveInDateObj.toISOString()}), ensuring late fee is 0`);
-        lateFee = 0;
-      }
     }
 
     // For new statements (insert path), enforce 5-day rule: do not create until 5 days before due date (move-in month is exempt)

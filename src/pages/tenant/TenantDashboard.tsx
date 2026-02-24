@@ -365,14 +365,34 @@ export default function TenantDashboard() {
 
       // If no unit found, try server-side fix: unit may be assigned to a profile with same email but different id (e.g. after invite)
       if (!unitData) {
-        const { data: fixedUnitId, error: rpcError } = await supabase.rpc("fix_tenant_unit_assignment_by_email");
+        let fixedUnitId: string | null = null;
+        let rpcError: { message?: string } | null = null;
+
+        const { data: fixed1, error: err1 } = await supabase.rpc("fix_tenant_unit_assignment_by_email");
+        rpcError = err1 ?? null;
+        fixedUnitId = fixed1 != null ? String(fixed1) : null;
+
+        // Fallback: pass email explicitly (handles profile email missing or mismatch)
+        if (!fixedUnitId && !rpcError && user.email) {
+          const emailToUse = user.email;
+          const { data: fixed2, error: err2 } = await supabase.rpc("fix_tenant_unit_assignment_by_email_with_email", {
+            p_email: emailToUse,
+          });
+          if (err2) {
+            console.warn("[TenantDashboard] fix_tenant_unit_assignment_by_email_with_email RPC error:", err2);
+          } else if (fixed2 != null) {
+            fixedUnitId = String(fixed2);
+            console.log("[TenantDashboard] Unit fixed via fix_tenant_unit_assignment_by_email_with_email");
+          }
+        }
+
         if (rpcError) {
           console.warn("[TenantDashboard] fix_tenant_unit_assignment_by_email RPC error:", rpcError);
           if (rpcError.message?.toLowerCase().includes("function") && rpcError.message?.toLowerCase().includes("does not exist")) {
             toast.error("App update required. Please ask your landlord to deploy the latest database migration.");
           }
         } else if (fixedUnitId) {
-          const unitId = String(fixedUnitId);
+          const unitId = fixedUnitId;
           const { data: fetchedUnit, error: fetchErr } = await supabase
             .from("units")
             .select(`
@@ -743,25 +763,65 @@ export default function TenantDashboard() {
               console.log("[TenantDashboard] Statement not paid, set initial balance:", calculatedInitialBalance, "(stored total_due:", Number(currentMonthStatement.total_due) || 0, "includes stale late fee:", storedLateFee, ")");
             }
           } else {
-            // No statement for current month - statements are generated 5 days before due date
-            setCurrentStatement(null);
-            setRemainingBalance(0);
-            // Still show any unpaid/overdue statement from another period if one exists
-            const { data: overdueStatement } = await supabase
-              .from("statements")
-              .select("*")
-              .eq("unit_id", unitData.id)
-              .in("status", ["unpaid", "overdue"])
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (overdueStatement) {
-              setCurrentStatement(overdueStatement);
+            // No statement for current month - ensure move-in month statement exists if move-in is this month
+            const moveInMonth = unitData.move_in_date
+              ? format(new Date(unitData.move_in_date), "MM/yyyy")
+              : null;
+            const isMoveInThisMonth = moveInMonth === currentMonth && !unitData.first_month_paid;
+            if (isMoveInThisMonth) {
+              try {
+                await supabase.functions.invoke("generate-statement", {
+                  body: { unit_id: unitData.id, period_month: currentMonth, skip_email_notification: true },
+                });
+              } catch (_e) {
+                // ignore
+              }
+              const { data: createdStatement } = await supabase
+                .from("statements")
+                .select("*")
+                .eq("unit_id", unitData.id)
+                .eq("period_month", currentMonth)
+                .maybeSingle();
+              if (createdStatement && createdStatement.status !== "paid") {
+                setCurrentStatement(createdStatement);
+                const baseAmount = Number(createdStatement.base_rent) + (Number(createdStatement.additional_fees) || 0);
+                setRemainingBalance(baseAmount);
+              } else {
+                setCurrentStatement(null);
+                setRemainingBalance(0);
+                const { data: overdueStatement } = await supabase
+                  .from("statements")
+                  .select("*")
+                  .eq("unit_id", unitData.id)
+                  .in("status", ["unpaid", "overdue"])
+                  .order("created_at", { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+                if (overdueStatement) {
+                  setCurrentStatement(overdueStatement);
+                  setRemainingBalance(null);
+                }
+              }
+            } else {
+              setCurrentStatement(null);
+              setRemainingBalance(0);
+              const { data: overdueStatement } = await supabase
+                .from("statements")
+                .select("*")
+                .eq("unit_id", unitData.id)
+                .in("status", ["unpaid", "overdue"])
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (overdueStatement) {
+                setCurrentStatement(overdueStatement);
+                setRemainingBalance(null);
+              }
             }
           }
         } else {
-          // First month paid - skip current month entirely
-          console.log("[TenantDashboard] First month paid, skipping current month. Looking for next month's statement.");
+          // Current prorated month paid - skip current month entirely
+          console.log("[TenantDashboard] Current prorated month paid, skipping current month. Looking for next month's statement.");
           
           // Calculate next month
           const today = new Date();
@@ -929,7 +989,7 @@ export default function TenantDashboard() {
               if (currentMonth === moveInMonth) {
                 const proratedAmount = calculateProratedRent(moveInDate, currentMonth, unitData.monthly_rent);
                 total = proratedAmount;
-                console.log("[Total Paid This Year] First month paid, no payments yet, total:", total);
+                console.log("[Total Paid This Year] Current prorated month paid, no payments yet, total:", total);
               }
             }
             setTotalPaid(total);
@@ -1245,7 +1305,7 @@ export default function TenantDashboard() {
       const moveInDate = new Date(unit.move_in_date);
       const moveInMonth = format(moveInDate, "MM/yyyy");
       
-      // If we're in the move-in month and first month is NOT paid, due date is move-in date + 1 day (24 hours after move-in)
+      // If we're in the move-in month and current prorated month is NOT paid, due date is move-in date + 1 day (24 hours after move-in)
       if (currentMonth === moveInMonth && !unit.first_month_paid) {
         const moveInDueDate = new Date(moveInDate);
         moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
@@ -1268,7 +1328,7 @@ export default function TenantDashboard() {
       return dueDate;
     }
     
-    // Fallback: For non-move-in months or if first month is paid, use standard due day
+    // Fallback: For non-move-in months or if current prorated month is paid, use standard due day
     const dueDate = new Date(today.getFullYear(), today.getMonth(), unit.due_day);
     if (dueDate < today) {
       dueDate.setMonth(dueDate.getMonth() + 1);
@@ -1446,54 +1506,72 @@ export default function TenantDashboard() {
       parseInt(year) === new Date(unit.move_in_date).getFullYear() &&
       parseInt(month) === new Date(unit.move_in_date).getMonth() + 1;
     
+    // Current prorated month (move-in month): no late fees ever
+    if (isMoveInMonth) {
+      return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
+    }
+    
+    const statementMonthNum = parseInt(month);
+    const statementYearNum = parseInt(year);
+    const todayMonthNum = today.getMonth() + 1;
+    const todayYearNum = today.getFullYear();
+
+    // Split payment: no late fee during statement month; late fee from 1st of next month
+    if (unit.allow_split_payment) {
+      const stillInStatementMonth = todayYearNum === statementYearNum && todayMonthNum === statementMonthNum;
+      if (stillInStatementMonth || todayYearNum < statementYearNum || (todayYearNum === statementYearNum && todayMonthNum < statementMonthNum)) {
+        return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
+      }
+      const lateFeeStartDate = startOfDay(new Date(statementYearNum, statementMonthNum, 1)); // first day of next month
+      const daysLate = differenceInDays(startOfDay(today), lateFeeStartDate);
+      let flatFee = 0;
+      if (unit.late_fee_type === 'flat' && unit.late_fee_amount) {
+        flatFee = Number(unit.late_fee_amount);
+      } else if (unit.late_fee_type === 'percent' && unit.late_fee_amount) {
+        flatFee = (Number(currentStatement.base_rent) * Number(unit.late_fee_amount)) / 100;
+      }
+      const daysForDailyFee = Math.max(0, daysLate - 1);
+      const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
+      const dailyFee = daysForDailyFee * dailyLateFeeRate;
+      return { flatFee, dailyFee, totalLateFee: flatFee + dailyFee };
+    }
+    
     // Calculate due date: move-in month uses move-in date + 1 day, otherwise standard due day
     let dueDate: Date;
     if (isMoveInMonth && unit.move_in_date) {
-      // For move-in month: rent is due 24 hours after move-in date (move-in date + 1 day)
       const moveInDate = startOfDay(new Date(unit.move_in_date));
       const moveInDueDate = new Date(moveInDate);
-      moveInDueDate.setDate(moveInDueDate.getDate() + 1); // Add 1 day (24 hours)
+      moveInDueDate.setDate(moveInDueDate.getDate() + 1);
       dueDate = moveInDueDate;
     } else {
-      // Standard due date
       dueDate = new Date(parseInt(year), parseInt(month) - 1, unit.due_day);
     }
     
-    // Normalize dates to start of day for accurate calculation
     const todayStart = startOfDay(today);
     const dueDateStart = startOfDay(dueDate);
     
-    // If today is the move-in date, no late fees should apply
     if (isMoveInMonth && unit.move_in_date) {
       const moveInDateStart = startOfDay(new Date(unit.move_in_date));
-      
-      // If today is the move-in date, no late fees
       if (todayStart.getTime() === moveInDateStart.getTime()) {
         return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
       }
     }
     
-    // If not past due date, no late fees
     if (todayStart <= dueDateStart) {
       return { flatFee: 0, dailyFee: 0, totalLateFee: 0 };
     }
     
     const daysLate = differenceInDays(todayStart, dueDateStart);
     
-    // Calculate flat late fee (one-time fee) from unit settings
     let flatFee = 0;
     if (unit.late_fee_type === 'flat' && unit.late_fee_amount) {
       flatFee = Number(unit.late_fee_amount);
     } else if (unit.late_fee_type === 'percent' && unit.late_fee_amount) {
       flatFee = (Number(currentStatement.base_rent) * Number(unit.late_fee_amount)) / 100;
     }
-    
-    // Daily late fee applies starting from day 2 (daysLate - 1)
-    // Daily fee only applies for days after the first day
     const daysForDailyFee = Math.max(0, daysLate - 1);
     const dailyLateFeeRate = Number(unit.daily_late_fee || 0);
     const dailyFee = daysForDailyFee * dailyLateFeeRate;
-    
     const calculatedTotal = flatFee + dailyFee;
     
     // Debug logging

@@ -388,7 +388,7 @@ export default function AdminDashboard() {
             value={loading ? "—" : stats.unpaidStatements}
             icon={AlertCircle}
             accentColor="warning"
-            href="/admin/payments"
+            href="/admin/tenants"
           />
         </div>
 

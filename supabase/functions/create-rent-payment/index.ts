@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import Stripe from "https://esm.sh/stripe@18.5.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
-import { getStripeKey } from "../_shared/stripe-config.ts";
+import { getStripeKey, getStripeMode } from "../_shared/stripe-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,6 +32,7 @@ serve(async (req) => {
     logStep("Function started");
 
     const stripeKey = getStripeKey();
+    const stripeMode = getStripeMode();
 
     const supabaseClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
@@ -501,6 +502,7 @@ serve(async (req) => {
       payment_method: paymentMethodDb, // Must be exactly 'Card' or 'ACH'
       status: "pending",
       stripe_payment_id: session.id,
+      stripe_mode: stripeMode,
     };
     
     logStep("Creating payment record", {

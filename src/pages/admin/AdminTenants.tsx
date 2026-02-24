@@ -36,6 +36,11 @@ interface StatementBreakdown {
   split_fee: number;
 }
 
+interface UnitAddon {
+  name: string;
+  price: number;
+}
+
 interface TenantData {
   id: string;
   email: string;
@@ -45,6 +50,8 @@ interface TenantData {
   unitNumber: string | null;
   unitId: string | null;
   monthlyRent: number | null;
+  moveInDate: string | null;
+  addons: UnitAddon[] | null;
   status: "active" | "pending" | "inactive";
   totalOwed: number;
   owedBreakdown: StatementBreakdown[];
@@ -89,7 +96,7 @@ export default function AdminTenants() {
       // Fetch only units that belong to this landlord's properties
       const { data: units, error: unitsError } = await supabase
         .from("units")
-        .select("id, tenant_id, unit_number, monthly_rent, property_id, lease_pdf_url, first_month_paid, due_day")
+        .select("id, tenant_id, unit_number, monthly_rent, property_id, lease_pdf_url, first_month_paid, due_day, move_in_date, addons")
         .in("property_id", propertyIds);
 
       if (unitsError) throw unitsError;
@@ -189,6 +196,8 @@ export default function AdminTenants() {
           status = "active";
         }
 
+        const unitAddons = unit?.addons as UnitAddon[] | null | undefined;
+        const addonsArray = Array.isArray(unitAddons) ? unitAddons : null;
         return {
           id: profile.id,
           email: profile.email,
@@ -198,6 +207,8 @@ export default function AdminTenants() {
           unitNumber: unit?.unit_number || null,
           unitId: unit?.id || null,
           monthlyRent: unit?.monthly_rent || null,
+          moveInDate: unit?.move_in_date ?? null,
+          addons: addonsArray ?? null,
           status,
           totalOwed,
           owedBreakdown,
@@ -406,15 +417,53 @@ export default function AdminTenants() {
                                 {tenant.owedBreakdown.map((s) => {
                                   const [mm, yyyy] = s.period_month.split("/");
                                   const periodLabel = format(new Date(Number(yyyy), Number(mm) - 1), "MMM yyyy");
-                                  const parts: string[] = [];
-                                  if (s.base_rent > 0) parts.push(`Base rent $${s.base_rent.toLocaleString()}`);
-                                  if (s.late_fee > 0) parts.push(`Late fee $${s.late_fee.toLocaleString()}`);
-                                  if (s.additional_fees > 0) parts.push(`Other $${s.additional_fees.toLocaleString()}`);
-                                  if (s.split_fee > 0) parts.push(`Split fee $${s.split_fee.toLocaleString()}`);
+                                  const addons = tenant.addons && tenant.addons.length > 0 ? tenant.addons : null;
+                                  const addonTotal = addons
+                                    ? addons.reduce((sum, a) => sum + Number(a.price || 0), 0)
+                                    : 0;
+                                  // Derive prorated from statement so breakdown always adds up to base_rent
+                                  const proratedFromStatement = Math.round((s.base_rent - addonTotal) * 100) / 100;
+                                  // Explain how prorated is calculated (match backend: days from move-in to end of month, inclusive)
+                                  let proratedFormula: string | null = null;
+                                  if (tenant.moveInDate && tenant.monthlyRent != null && addons && addons.length > 0) {
+                                    const moveIn = new Date(tenant.moveInDate);
+                                    const statementMonth = Number(mm);
+                                    const statementYear = Number(yyyy);
+                                    const monthStart = new Date(statementYear, statementMonth - 1, 1);
+                                    const monthEnd = new Date(statementYear, statementMonth, 0);
+                                    if (moveIn >= monthStart && moveIn <= monthEnd) {
+                                      const daysInMonth = monthEnd.getDate();
+                                      const moveInDay = moveIn.getDate();
+                                      const daysRemaining = daysInMonth - moveInDay + 1;
+                                      if (daysRemaining < daysInMonth) {
+                                        proratedFormula = `Prorated: ${daysRemaining} days × ($${tenant.monthlyRent.toLocaleString()} ÷ ${daysInMonth}) = $${proratedFromStatement.toLocaleString()}`;
+                                      }
+                                    }
+                                  }
+                                  const baseParts: string[] = [];
+                                  if (addons && addons.length > 0) {
+                                    baseParts.push(`Prorated rent $${proratedFromStatement.toLocaleString()}`);
+                                    addons.forEach((a) => {
+                                      baseParts.push(`${a.name} $${Number(a.price).toLocaleString()}`);
+                                    });
+                                  } else if (s.base_rent > 0) {
+                                    baseParts.push(`Base rent $${s.base_rent.toLocaleString()}`);
+                                  }
+                                  const otherParts: string[] = [];
+                                  if (s.late_fee > 0) otherParts.push(`Late fee $${s.late_fee.toLocaleString()}`);
+                                  if (s.additional_fees > 0) otherParts.push(`Other $${s.additional_fees.toLocaleString()}`);
+                                  if (s.split_fee > 0) otherParts.push(`Split fee $${s.split_fee.toLocaleString()}`);
+                                  const baseLine = baseParts.length ? baseParts.join(" + ") + ` = $${s.base_rent.toLocaleString()}` : null;
+                                  const otherLine = otherParts.length ? otherParts.join(" + ") : null;
                                   return (
                                     <div key={s.period_month} className="border-b border-border/50 pb-1.5 last:border-0 last:pb-0">
-                                      <span className="font-medium">{periodLabel}:</span>{" "}
-                                      {parts.length ? parts.join(" + ") : "—"} = ${s.total_due.toLocaleString()}
+                                      <span className="font-medium">{periodLabel}:</span>
+                                      {proratedFormula != null && (
+                                        <div className="mt-0.5 text-muted-foreground text-[11px]">{proratedFormula}</div>
+                                      )}
+                                      {baseLine != null && <div className="mt-0.5">{baseLine}</div>}
+                                      {otherLine != null && <div className="mt-0.5 text-muted-foreground">{otherLine}</div>}
+                                      <div className="mt-0.5 font-medium">Total = ${s.total_due.toLocaleString()}</div>
                                     </div>
                                   );
                                 })}

@@ -405,7 +405,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  The date when the tenant moves in. If first month is not paid, tenant will owe prorated rent from this date to the end of the month. If first month is paid, tenant won't owe anything until the due date of the following month.
+                  The date when the tenant moves in. If the current prorated month is not paid, tenant will owe prorated rent from this date to the end of the month. If the current prorated month is paid, tenant won't owe anything until the due date of the following month.
                 </p>
               </div>
             )}
@@ -420,7 +420,7 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                   disabled={loading}
                 />
                 <Label htmlFor="firstMonthPaid" className="text-sm font-normal cursor-pointer">
-                  First month has been paid (tenant won't owe anything until the due date of the following month)
+                  Current prorated month has been paid (tenant won't owe anything until the due date of the following month)
                 </Label>
               </div>
             )}
@@ -446,8 +446,8 @@ export function AddUnitDialog({ propertyId, onUnitAdded }: AddUnitDialogProps) {
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {firstMonthPaid 
-                              ? "✅ First month paid - Tenant won't owe anything until the due date of the following month."
-                              : "⚠️ First month NOT paid - Tenant will owe this prorated amount for the move-in month."}
+                              ? "✅ Current prorated month paid - Tenant won't owe anything until the due date of the following month."
+                              : "⚠️ Current prorated month NOT paid - Tenant will owe this prorated amount for the move-in month."}
                           </p>
                         </>
                       ) : (

@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import Stripe from "https://esm.sh/stripe@18.5.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
-import { getStripeKey } from "../_shared/stripe-config.ts";
+import { getStripeKey, getStripeMode } from "../_shared/stripe-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -65,6 +65,13 @@ serve(async (req) => {
 
     if (!payment.stripe_payment_id) {
       throw new Error("Payment has no Stripe payment ID");
+    }
+
+    const currentStripeMode = getStripeMode();
+    if (payment.stripe_mode && payment.stripe_mode !== currentStripeMode) {
+      throw new Error(
+        `Payment was created in Stripe ${payment.stripe_mode} mode but current environment is ${currentStripeMode}. Use the correct app environment to sync this payment.`
+      );
     }
 
     // Check if it's a session ID or payment intent ID
@@ -154,7 +161,8 @@ serve(async (req) => {
       const { error: updateError } = await supabaseAdmin
         .from("payments")
         .update(updateData)
-        .eq("id", payment_id);
+        .eq("id", payment_id)
+        .eq("stripe_mode", currentStripeMode);
 
       if (updateError) {
         throw new Error(`Failed to update payment: ${updateError.message}`);

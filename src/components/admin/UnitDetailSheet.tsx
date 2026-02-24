@@ -343,7 +343,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         changes.push(`Split payment fee changed from $${unit.split_payment_fee || 30.00} to $${formData.split_payment_fee}`);
       }
       if (formData.first_month_paid !== (unit.first_month_paid || false)) {
-        changes.push(`First month paid status changed from ${unit.first_month_paid ? 'paid' : 'unpaid'} to ${formData.first_month_paid ? 'paid' : 'unpaid'}`);
+        changes.push(`Current prorated month paid status changed from ${unit.first_month_paid ? 'paid' : 'unpaid'} to ${formData.first_month_paid ? 'paid' : 'unpaid'}`);
       }
       const currentMoveInDate = unit.move_in_date ? new Date(unit.move_in_date).toISOString().split('T')[0] : "";
       if (formData.move_in_date !== currentMoveInDate) {
@@ -454,32 +454,29 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         }
       }
 
-      // Auto-generate statement if tenant was just assigned with move-in date
+      // Ensure move-in month statement exists whenever unit has tenant + move-in date
+      // (covers just-assigned, move-in date changed, or statement never created)
       const wasTenantJustAssigned = (!unit.tenant_id || unit.tenant_id === "") && updateData.tenant_id;
-      if (wasTenantJustAssigned && formData.move_in_date) {
-        const today = new Date();
-        const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
-        const currentYear = today.getFullYear();
-        const periodMonth = `${currentMonth}/${currentYear}`;
-        
-        console.log("Tenant just assigned with move-in date, generating statement for:", periodMonth);
+      if (updateData.tenant_id && formData.move_in_date) {
+        const moveIn = new Date(formData.move_in_date);
+        const periodMonth = `${String(moveIn.getMonth() + 1).padStart(2, "0")}/${moveIn.getFullYear()}`;
+        const skipEmail = !wasTenantJustAssigned;
+        console.log("Ensuring move-in month statement exists:", periodMonth, skipEmail ? "(skip email)" : "");
         try {
           const { data: generatedStatement, error: generateError } = await supabase.functions.invoke("generate-statement", {
-            body: { 
-              unit_id: unit.id, 
-              period_month: periodMonth 
-            }
+            body: {
+              unit_id: unit.id,
+              period_month: periodMonth,
+              ...(skipEmail && { skip_email_notification: true }),
+            },
           });
-          
           if (generateError) {
             console.error("Error generating statement:", generateError);
-            // Don't show error to user - statement might already exist
           } else if (generatedStatement) {
-            console.log("Statement generated successfully:", generatedStatement);
+            console.log("Statement ensured for move-in month:", generatedStatement);
           }
         } catch (error) {
           console.error("Exception generating statement:", error);
-          // Don't show error to user - statement might already exist
         }
       }
 
@@ -519,38 +516,6 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
         }
       }
       
-      // Regenerate statement if move-in date changed for an existing tenant
-      // Reuse currentMoveInDate that was already calculated above
-      const moveInDateChanged = formData.move_in_date !== currentMoveInDate && formData.move_in_date;
-      if (moveInDateChanged) {
-        // Regenerate current month statement to recalculate late fees
-        const today = new Date();
-        const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
-        const currentYear = today.getFullYear();
-        const periodMonth = `${currentMonth}/${currentYear}`;
-        
-        console.log("Move-in date changed, regenerating statement for:", periodMonth);
-        try {
-          const { data: regeneratedStatement, error: regenerateError } = await supabase.functions.invoke("generate-statement", {
-            body: { 
-              unit_id: unit.id, 
-              period_month: periodMonth,
-              skip_email_notification: true // Skip email since this is just a correction, not a new statement
-            }
-          });
-          
-          if (regenerateError) {
-            console.error("Error regenerating statement:", regenerateError);
-            // Don't show error to user - statement might already exist
-          } else if (regeneratedStatement) {
-            console.log("Statement regenerated successfully:", regeneratedStatement);
-          }
-        } catch (error) {
-          console.error("Exception regenerating statement:", error);
-          // Don't show error to user - statement might already exist
-        }
-      }
-
       // Send notification if there are changes and tenant is assigned
       if (changes.length > 0 && unit.tenant_id) {
         // Get property info for the email
@@ -746,7 +711,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                     disabled={saving}
                   />
                   <p className="text-xs text-muted-foreground">
-                    The date when the tenant moves in. Used to calculate pro-rated rent for the first month.
+                    The date when the tenant moves in. Used to calculate pro-rated rent for the current prorated month.
                   </p>
                 </div>
               )}
@@ -760,7 +725,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                     disabled={saving}
                   />
                   <Label htmlFor="firstMonthPaid" className="text-sm font-normal cursor-pointer">
-                    First month has been paid (tenant not responsible for current month)
+                    Current prorated month has been paid (tenant not responsible for current month)
                   </Label>
                 </div>
               )}
@@ -788,7 +753,7 @@ export function UnitDetailSheet({ unit, open, onOpenChange, onUnitUpdated }: Uni
                   if (!firstMonthPaid && prorated === null) return null;
                   const displayAmount = firstMonthPaid ? 0 : (prorated ?? 0);
                   const displayMessage = firstMonthPaid
-                    ? "First month paid - no charge for the move-in month."
+                    ? "Current prorated month paid - no charge for the move-in month."
                     : "This amount will be charged for the move-in month only.";
                   return (
                     <div className="bg-muted/50 p-3 rounded-lg mt-2">

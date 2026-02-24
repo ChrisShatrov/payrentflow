@@ -193,50 +193,69 @@ export default function TenantStatements() {
     const statementMonthStart = new Date(year, month - 1, 1);
     const statementMonthEnd = new Date(year, month, 0);
     
-    // Check if this is the move-in month
+    // No late fees for move-in month (current prorated month)
+    if (unit.move_in_date) {
+      const moveInDate = new Date(unit.move_in_date);
+      moveInDate.setHours(0, 0, 0, 0);
+      if (moveInDate >= statementMonthStart && moveInDate <= statementMonthEnd) {
+        return 0;
+      }
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayMonthNum = today.getMonth() + 1;
+    const todayYearNum = today.getFullYear();
+
+    // Split payment: no late fee during statement month; late fee from 1st of next month
+    if (unit.allow_split_payment) {
+      const stillInStatementMonth = todayYearNum === year && todayMonthNum === month;
+      if (stillInStatementMonth || todayYearNum < year || (todayYearNum === year && todayMonthNum < month)) {
+        return 0;
+      }
+      const lateFeeStartDate = new Date(year, month, 1); // first day of next month (month is 1-based from period)
+      lateFeeStartDate.setHours(0, 0, 0, 0);
+      const daysLate = differenceInDays(today, lateFeeStartDate);
+      let oneTimeFee = 0;
+      if (unit.late_fee_type === "flat") {
+        oneTimeFee = unit.late_fee_amount;
+      } else if (unit.late_fee_type === "percent") {
+        oneTimeFee = (Number(statement.base_rent) * unit.late_fee_amount) / 100;
+      }
+      const daysForDailyFee = Math.max(0, daysLate - 1);
+      const dailyFee = daysForDailyFee * (unit.daily_late_fee || 0);
+      return oneTimeFee + dailyFee;
+    }
+    
+    // Check if this is the move-in month (for due date); then compute fees for non-move-in months
     let dueDate: Date;
     if (unit.move_in_date) {
       const moveInDate = new Date(unit.move_in_date);
       moveInDate.setHours(0, 0, 0, 0);
-      
-      // Check if move-in is in this statement month
       if (moveInDate >= statementMonthStart && moveInDate <= statementMonthEnd) {
-        // For move-in month, due date is move-in date + 1 day
         dueDate = new Date(moveInDate);
         dueDate.setDate(dueDate.getDate() + 1);
         dueDate.setHours(0, 0, 0, 0);
       } else {
-        // Standard due date
         dueDate = new Date(year, month - 1, unit.due_day);
         dueDate.setHours(0, 0, 0, 0);
       }
     } else {
-      // Standard due date
       dueDate = new Date(year, month - 1, unit.due_day);
       dueDate.setHours(0, 0, 0, 0);
     }
     
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    // Never calculate late fees if today <= dueDate
     if (today <= dueDate) return 0;
     
     const daysLate = differenceInDays(today, dueDate);
-    
-    // One-time late fee
     let oneTimeFee = 0;
     if (unit.late_fee_type === "flat") {
       oneTimeFee = unit.late_fee_amount;
     } else if (unit.late_fee_type === "percent") {
       oneTimeFee = (Number(statement.base_rent) * unit.late_fee_amount) / 100;
     }
-    
-    // Daily late fee (only applies starting from day 2)
-    // Daily fee only applies for days after the first day (so daysLate - 1)
     const daysForDailyFee = Math.max(0, daysLate - 1);
-    const dailyFee = daysForDailyFee * unit.daily_late_fee;
-    
+    const dailyFee = daysForDailyFee * (unit.daily_late_fee || 0);
     return oneTimeFee + dailyFee;
   };
 

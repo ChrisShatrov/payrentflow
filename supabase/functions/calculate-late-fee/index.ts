@@ -64,28 +64,30 @@ serve(async (req) => {
     const allowSplitPayment = Boolean(unit.allow_split_payment)
 
     if (allowSplitPayment) {
-      // Split payment logic: No fees if <= 30 days, fees if > 30 days
-      if (daysLate > 30) {
-        // One-time late fee (flat or percent) - only if > 30 days
+      // Split payment: no late fee during the statement (due date) month; late fee from 1st of next month
+      const todayMonthNum = today.getMonth()
+      const todayYearNum = today.getFullYear()
+      const stillInStatementMonth = todayYearNum === currentYear && todayMonthNum === currentMonth
+      if (stillInStatementMonth) {
+        lateFee = 0
+        console.log(`No late fees (split payment) - still in statement month`);
+      } else {
+        const lateFeeStartDate = new Date(currentYear, currentMonth + 1, 1)
+        lateFeeStartDate.setHours(0, 0, 0, 0)
+        const daysLateFromNextMonth = Math.floor((today.getTime() - lateFeeStartDate.getTime()) / (1000 * 60 * 60 * 24))
         if (unit.late_fee_type === 'flat') {
           oneTimeFee = Number(unit.late_fee_amount)
         } else if (unit.late_fee_type === 'percent') {
           oneTimeFee = (Number(unit.monthly_rent) * Number(unit.late_fee_amount)) / 100
         }
-
-        // Daily late fee - only applies starting from day 31 (so daysLate - 30)
         const dailyLateFee = Number(unit.daily_late_fee || 0)
         if (dailyLateFee > 0) {
-          const daysForDailyFee = Math.max(0, daysLate - 30)
+          const daysForDailyFee = Math.max(0, daysLateFromNextMonth - 1)
           dailyFee = daysForDailyFee * dailyLateFee
-          console.log(`Applied daily late fee for split payment: ${daysForDailyFee} days × $${dailyLateFee} = $${dailyFee} (starting from day 31)`);
+          console.log(`Applied daily late fee for split payment: ${daysForDailyFee} days × $${dailyLateFee} (from 1st of next month)`);
         }
-
         lateFee = oneTimeFee + dailyFee
-        console.log(`Payment is ${daysLate} days late (split payment allowed), total late fee: $${lateFee} (one-time: $${oneTimeFee}, daily: $${dailyFee})`);
-      } else {
-        // No late fees if <= 30 days and split payment is allowed
-        console.log(`Payment is ${daysLate} days late but split payment is allowed and <= 30 days, no late fees applied`);
+        console.log(`Payment late (split payment, from ${lateFeeStartDate.toISOString()}): total late fee: $${lateFee}`);
       }
     } else {
       // Standard logic: charge fees immediately
